@@ -383,5 +383,53 @@ descriptors:
 4. **Redis** increments the counter. If the counter exceeds `10` in that minute interval, the RLS returns `OVER_LIMIT` to Envoy.
 5. **Envoy** immediately terminates the connection, returning a `429 Too Many Requests` status code back to the client.
 
+---
+
+## 🧮 Rate-Limiting Algorithms: The Token Bucket & Beyond
+
+Enforcing rate limits requires selecting an appropriate mathematical algorithm. Envoy’s built-in **Local Rate Limiting** is powered by the highly popular and versatile **Token Bucket** algorithm.
+
+---
+
+### 🪣 1. The Token Bucket Algorithm (Envoy's Native Strategy)
+
+In Envoy’s Local Rate Limiter, the token bucket controls request allowance using three primary settings:
+*   **`max_tokens`**: The total capacity of the bucket. This defines the **maximum burst size** the proxy will allow at once.
+*   **`tokens_per_fill`**: The number of tokens added to the bucket during each refill interval.
+*   **`fill_interval`**: How often (e.g. every `1s`, `60s`) the bucket is refilled.
+
+#### 💡 How it works:
+* An empty bucket starts with `max_tokens`.
+* Each incoming request consumes **exactly 1 token**.
+* If tokens are available, the request is allowed. If the bucket is empty (`0 tokens`), Envoy immediately drops the request and returns a `429 Too Many Requests`.
+* Over time, the bucket is replenished by `tokens_per_fill` at every `fill_interval` boundary, up to the ceiling of `max_tokens`.
+
+```text
+       Refill (tokens_per_fill / fill_interval)
+                 │
+                 ▼
+          ┌─────────────┐
+          │ ◯ ◯ ◯ ◯ ◯ ◯ │ ◄── Bucket Capacity (max_tokens)
+          └──────┬──────┘
+                 │
+                 ▼  Request consumes 1 token
+             [ Allowed ]
+```
+
+---
+
+### ⚖️ Comparison of Industry Rate-Limiting Algorithms
+
+Depending on your traffic profile, you might select or configure different algorithms. Here is a comparison of the top five industry algorithms, detailing their operational mechanics, Pros, and Cons:
+
+| Algorithm | How It Works | 👍 Pros (When to use) | 👎 Cons (When to avoid) |
+| :--- | :--- | :--- | :--- |
+| **Token Bucket** <br>*(Envoy's Default)* | Tokens are added to a bucket of capacity `max_tokens` at a steady rate. Requests consume tokens. | • **Supports Bursts**: Handles spikes of traffic elegantly up to `max_tokens` size. <br>• **High performance** and highly memory efficient. | • **Burst potential**: Can temporarily stress downstream resources if massive bursts occur. |
+| **Leaky Bucket** | Requests enter a queue/bucket and drip out to the backend at a **constant, smooth rate**. | • **Smooths Traffic**: Completely eliminates bursts, providing highly predictable load. | • **Adds Latency**: Queued requests are delayed to maintain the drip rate. <br>• **Rejects early** if the queue overflows. |
+| **Fixed Window Counter** | Tracks request count inside a fixed window (e.g., a specific clock minute). Resets to 0 when the window rolls over. | • **Simplicity**: Very easy to implement and extremely low memory overhead. | • **Boundary Bursting**: Can allow **double the limit** to pass at window boundaries (e.g., maximum requests at `11:59:59` and again at `12:00:00`). |
+| **Sliding Window Log** | Tracks a timestamped log of *every* request. Discards logs older than the rolling window and counts remaining logs. | • **Extreme Accuracy**: Totally eliminates the boundary bursting problem. | • **High Memory Cost**: Must store timestamps for every single request, making it highly memory-expensive under high load. |
+| **Sliding Window Counter** | Approximates a sliding window by calculating a weighted sum of the current and previous fixed window counters. | • **High Performance**: Extremely accurate with very low memory footprint (does not store individual logs). | • **Approximation**: Has a tiny approximation error (~4-5%) if traffic spikes sharply at window boundary lines. |
+
+
 
 ```
