@@ -693,6 +693,85 @@ static_resources:
 
 ---
 
+### 🛠️ Master Template: Fully Complete `envoy.yaml` with In-Memory Simple HTTP Caching
+
+For comparison, here is a fully complete `envoy.yaml` showing the **L7 Simple HTTP Caching Filter**. Note how self-contained this is: **there are no gRPC configurations or secondary backend clusters defined at the bottom**, because the cache runs entirely inside Envoy's own memory footprint:
+
+```yaml
+# ====================================================================
+# FULLY COMPLETE ENVOY.YAML CONFIGURATION LAYOUT
+# Demonstrating L4 Listener -> L7 HCM Filter -> In-Memory Simple HTTP Caching -> Upstream
+# ====================================================================
+
+static_resources:
+  listeners:
+    - name: my_http_listener
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 80 # Listen on L4 Port 80
+
+      filter_chains:
+        - filters:
+            # ────────────────────────────────────────────────────────
+            # EXACTLY ONE L4 Network Filter in the L4 chain list!
+            # ────────────────────────────────────────────────────────
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+
+                # ─── SIBLING 1: Routing Map ───
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: cached_service
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: local_app # Raw endpoint mapping
+
+                # ─── SIBLING 2: HTTP Processing Stack ───
+                http_filters:
+                  # ========================================================
+                  # L7 SELF-CONTAINED IN-MEMORY HTTP CACHE FILTER
+                  # ========================================================
+                  - name: envoy.filters.http.cache
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.cache.v3.CacheConfig
+                      http_cache:
+                        name: envoy.extensions.http.cache.simple # ◄── Self-contained!
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.http.cache.simple_http_cache.v3.SimpleHttpCacheConfig
+
+                  # --- TERMINAL FILTER ---
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.http.router.v3.Router
+
+  # ────────────────────────────────────────────────────────
+  # UPSTREAM CLUSTERS (Only the target application is needed!)
+  # ────────────────────────────────────────────────────────
+  clusters:
+    - name: local_app
+      connect_timeout: 0.25s
+      type: STATIC
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: local_app
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 8080 # Target backend application
+```
+
+---
+
 ## 🧱 Component Roles & Physical Architecture
 
 To fully understand how global rate limiting resolves distributed state in Kubernetes, it helps to understand the exact division of duties and physical network path.
