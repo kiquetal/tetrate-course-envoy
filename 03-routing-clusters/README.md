@@ -474,3 +474,71 @@ descriptors:
       requests_per_unit: 10
 ```
 
+---
+
+## 🧱 Component Roles & Network Flow Breakdown
+
+To fully understand how global rate limiting resolves distributed state in Kubernetes, it helps to understand the exact division of duties and physical network path.
+
+### 📦 Physical Duties & Config Reference
+
+| Component / Container | What it is | Configuration File | What is inside the file? |
+| :--- | :--- | :--- | :--- |
+| **Envoy Proxy** <br>*(Sidecar or Gateway)* | The actual network proxy that intercepts and load-balances client connections. | **`envoy.yaml`** | • Tells Envoy what gRPC cluster endpoint the RLS daemon runs on.<br>• Instructs Envoy to extract header values and send them dynamically to RLS. |
+| **Rate Limit Service (RLS)** <br>*(Lyft Rate Limit Container)* | A standalone, lightweight gRPC server daemon running in your cluster. | **`ratelimit.yaml`** | • Defines the **nested decision rules, units, and thresholds** (e.g. limit `/api` to `10/min`).<br>• Tells the container how to authenticate and talk to **Redis**. |
+| **Redis** <br>*(Cache Database)* | High-performance in-memory key-value database. | *Standard DB instances* | • Stores the raw numerical counters (e.g. `IP:198.51.100.42 = 8 requests`). |
+
+---
+
+### 🎨 The Physical Network Path (ASCII Diagram)
+
+```text
+                                   +----------------------------------+
+                                   |         Kubernetes Pod           |
+                                   |                                  |
+                                   |   +--------------------------+   |
+                                   |   |                          |   |
+  [ Client Request ] ─────────────►│   |      Envoy Sidecar       |   |
+     (HTTP/HTTPS)                  |   |   (Ex: Ingress Gateway)  |   |
+                                   |   +─────────────┬────────────+   |
+                                   |                 │                |
+                                   |                 │ (Plaintext)    |
+                                   |                 ▼                |
+                                   |   +--------------------------+   |
+                                   |   |      Your Go App         |   |
+                                   |   |      (Port 8080)         |   |
+                                   |   +--------------------------+   |
+                                   +----------------------------------+
+                                                     │
+                                                     │ (gRPC / Port 8081)
+                                                     ▼
+                                   +----------------------------------+
+                                   |     Standalone RLS Pod           |
+                                   |                                  |
+                                   |   +--------------------------+   |
+                                   |   |   Rate Limit Container   |   |
+                                   |   |  (Reads ratelimit.yaml)  |   |
+                                   |   +─────────────┬────────────+   |
+                                   +─────────────────┼────────────────+
+                                                     │
+                                                     │ (Redis TCP Protocol)
+                                                     ▼
+                                   +----------------------------------+
+                                   |        Redis Cluster/Pod         |
+                                   |                                  |
+                                   |   +--------------------------+   |
+                                   |   |      Redis Database      |   |
+                                   |   |    (Stores 10/min count) |   |
+                                   |   +--------------------------+   |
+                                   +----------------------------------+
+```
+
+---
+
+### 🌐 Official Reference Resources
+
+*   **Envoy's Global Rate Limit HTTP Filter**: Official specification of the Envoy filter schema. ➔ [Envoy Docs: rate_limit](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/rate_limit_filter)
+*   **Lyft's Reference RLS Container**: The absolute reference implementation of the gRPC RLS server. ➔ [GitHub: envoyproxy/ratelimit (Lyft)](https://github.com/envoyproxy/ratelimit)
+*   **Istio Rate Limiting Guide**: How Istio coordinates these components dynamically. ➔ [Istio Docs: Rate Limiting](https://istio.io/latest/docs/tasks/policy-enforcement/rate-limiting/)
+
+
