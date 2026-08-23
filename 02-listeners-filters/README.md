@@ -183,70 +183,122 @@ graph TD
 
 ## 🔄 L7 Upstream Response & Local Reply Transformation
 
-Envoy allows you to dynamically intercept, modify, or rewrite responses sent by upstream servers (or generated locally by Envoy itself) based on HTTP status codes. There are three common ways to achieve this:
+Envoy allows you to dynamically intercept, modify, or rewrite responses sent by upstream servers (or generated locally by Envoy itself) based on HTTP status codes.
 
-### 1. Header Manipulation based on Response Codes
-You can append, rewrite, or inject HTTP headers based on upstream responses at the Route or Virtual Host level:
+### 📌 Structural Hierarchy: Where do these options live in `envoy.yaml`?
+
+To configure these modifications, you must understand exactly where they nest inside your configuration file:
+
 ```yaml
-route_config:
-  virtual_hosts:
-    - name: backend_service
-      domains: ["*"]
-      routes:
-        - match: { prefix: "/" }
-          route:
-            cluster: local_app
-            # Dynamic header injection using Envoy formatting specifiers:
-            response_headers_to_add:
-              - header:
-                  key: "x-upstream-status"
-                  value: "%RESPONSE_CODE%"
-              - header:
-                  key: "x-response-flags"
-                  value: "%RESPONSE_FLAGS%"
+static_resources:
+  listeners:
+    - name: ingress_listener
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                
+                # =========================================================
+                # OPTION 2: Local Reply Config (Directly inside HCM)
+                # =========================================================
+                local_reply_config:
+                  mappers:
+                    - filter:
+                        status_code_filter:
+                          comparison: { op: EQ, value: 503 }
+                      headers_to_add:
+                        - header: { key: "x-custom-fallback", value: "active" }
+                      body_format_override:
+                        text_format: "Service under high load."
+
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend_service
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route:
+                            cluster: local_app
+                            # =========================================================
+                            # OPTION 1: Response Headers (Nests under Route or Virtual Host)
+                            # =========================================================
+                            response_headers_to_add:
+                              - header: { key: "x-upstream-status", value: "%RESPONSE_CODE%" }
+                              - header: { key: "x-response-flags", value: "%RESPONSE_FLAGS%" }
+
+                http_filters:
+                  # =========================================================
+                  # OPTION 3: HTTP Filters (Nests inside HCM Http Filters list)
+                  # =========================================================
+                  - name: envoy.filters.http.lua
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        inline_string: |
+                          function envoy_on_response(response_handle)
+                            local status = response_handle:headers():get(":status")
+                            if status == "500" then
+                              response_handle:headers():replace(":status", "503")
+                              response_handle:headers():add("x-rewritten-by", "envoy-lua")
+                            end
+                          end
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
 ```
 
-### 2. Local Reply Modification (`local_reply_config`)
-When Envoy itself rejects a request (e.g., a `503 Service Unavailable` due to cluster connection failure, or a `403 Forbidden` from RBAC), you can use `local_reply_config` inside the `http_connection_manager` to catch the error code and map it to a custom response payload or custom headers:
-```yaml
-local_reply_config:
-  mappers:
-    - filter:
-        status_code_filter:
-          comparison:
-            op: EQ
-            value: 503
-      headers_to_add:
-        - header:
-            key: "x-custom-fallback"
-            value: "active"
-      body_format_override:
-        text_format: "Our backend cluster is experiencing high load. Please try again shortly."
-```
+---
 
-### 3. Lightweight Response Rewriting using the Lua Filter
-If you need dynamic script-based response modification (for example, converting an upstream `500 Internal Server Error` into a clean, client-facing `503 Service Unavailable` with customized headers), you can configure the built-in HTTP **Lua Filter**:
-```yaml
-http_filters:
-  - name: envoy.filters.http.lua
-    typed_config:
-      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
-      default_source_code:
-        inline_string: |
-          function envoy_on_response(response_handle)
-            -- 1. Read upstream status code
-            local status = response_handle:headers():get(":status")
-            
-            -- 2. If status is a 500 server error, modify the response
-            if status == "500" then
-              response_handle:headers():replace(":status", "503")
-              response_handle:headers():add("x-rewritten-by", "envoy-lua")
-              response_handle:body():setBytes("The backend returned an error. Converted to a clean 503 response.")
-            end
-          end
-  - name: envoy.filters.http.router
-    typed_config:
-      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+### 🚀 Advanced Response Transformation (Proxy-Wasm Go / Rust SDK)
+
+When lightweight scripting (Lua) or basic mapping is not powerful enough, you move to the **Advanced Layer: Proxy-Wasm SDK**. This allows you to compile highly complex response modification logic in **Go, Rust, or C++** into WebAssembly and execute it directly in Envoy at native speed.
+
+#### How Advanced Wasm Response Interception Works:
+1. **`OnHttpResponseHeaders`**:
+   Invoked as soon as Envoy receives HTTP response headers from the upstream application.
+   * *Example*: You can inspect the `:status` header or upstream headers, and dynamically choose to cancel the stream, redirect to a fallback cluster, or inject fresh authorization metadata.
+2. **`OnHttpResponseBody`**:
+   Invoked when response data chunks stream through Envoy.
+   * *Example*: You can capture the response body buffer (like a JSON payload), parse it, sanitize personal data (PII masking), inject additional JSON fields, or modify payload sizes on the fly.
+
+##### Advanced Go/Wasm SDK Interceptor Skeleton:
+```go
+package main
+
+import (
+	"github.com/tetratelabs/proxy-wasm-go-sdk/proxywasm"
+	"github.com/tetratelabs/proxy-wasm-go-sdk/proxywasm/types"
+)
+
+type httpContext struct {
+	types.DefaultHttpContext
+}
+
+// 1. Intercept Response Headers
+func (ctx *httpContext) OnHttpResponseHeaders(numHeaders int, endOfStream bool) types.Action {
+	status, err := proxywasm.GetHttpResponseHeader(":status")
+	if err == nil && status == "500" then {
+		// Mask 500 error, transform status to 503 Service Unavailable
+		proxywasm.ReplaceHttpResponseHeader(":status", "503")
+		proxywasm.AddHttpResponseHeader("x-transformed-by", "advanced-wasm-gateway")
+	}
+	return types.ActionContinue
+}
+
+// 2. Intercept and Modify Response Body
+func (ctx *httpContext) OnHttpResponseBody(bodySize int, endOfStream bool) types.Action {
+	if bodySize > 0 {
+		// Fetch the raw response body stream
+		body, _ := proxywasm.GetHttpResponseBody(0, bodySize)
+		
+		// Advanced Task: Parse and rewrite JSON payload dynamically
+		modifiedBody := []byte(`{"error": "Service Temporarily Offline", "code": 503}`)
+		proxywasm.ReplaceHttpResponseBody(modifiedBody)
+	}
+	return types.ActionContinue
+}
 ```
 
 ---
