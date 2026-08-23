@@ -168,7 +168,7 @@ If you want to route to a service outside the mesh (like an external payment gat
 This tells Istiod to generate an Envoy cluster targeting that specific hostname:
 
 ```yaml
-apiVersion: networking.istio.io/v1alpha3
+apiVersion: networking.istio.io/v1
 kind: ServiceEntry
 metadata:
   name: external-payment-gateway
@@ -187,7 +187,7 @@ spec:
 Active health checking and outlier detection (passive health checking) are configured via the Istio **`DestinationRule`**:
 
 ```yaml
-apiVersion: networking.istio.io/v1alpha3
+apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
   name: payment-outlier-detection
@@ -282,7 +282,7 @@ When running inside Istio, you **must use L7 limits** (`max_requests` or `maxReq
 Both **Load Balancing** and **Circuit Breaking** are mapped directly into the Istio **`DestinationRule`** under `trafficPolicy`:
 
 ```yaml
-apiVersion: networking.istio.io/v1alpha3
+apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
   name: protected-service-policy

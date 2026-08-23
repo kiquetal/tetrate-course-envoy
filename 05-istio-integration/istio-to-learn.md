@@ -65,7 +65,7 @@ This creates synchronization issues and config drift. Centrally locating it in `
 Here is the exact Kubernetes manifest setup. Placing it in `namespace-b` with `exportTo: ["*"]` ensures KrakenD can read and enforce it perfectly:
 
 ```yaml
-apiVersion: networking.istio.io/v1alpha3
+apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
   name: go-backend-circuit-breaker
