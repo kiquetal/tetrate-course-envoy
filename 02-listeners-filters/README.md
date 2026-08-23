@@ -135,7 +135,16 @@ static_resources:
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
 
-                  # --- HTTP FILTER 3: Execute Custom Lua Scripts ---
+                  # --- HTTP FILTER 3: HTTP Caching (L7 Interceptor) ---
+                  - name: envoy.filters.http.cache
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.cache.v3.CacheConfig
+                      http_cache:
+                        name: envoy.extensions.http.cache.simple
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.http.cache.simple_http_cache.v3.SimpleHttpCacheConfig
+
+                  # --- HTTP FILTER 4: Execute Custom Lua Scripts ---
                   - name: envoy.filters.http.lua
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
