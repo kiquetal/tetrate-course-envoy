@@ -301,6 +301,39 @@ func (ctx *httpContext) OnHttpResponseBody(bodySize int, endOfStream bool) types
 }
 ```
 
+#### 📦 The Missing Link: Loading the `.wasm` binary in `envoy.yaml`
+
+Once you compile your Go code into a WebAssembly binary (e.g., `response_transformer.wasm`), you link it into Envoy by adding the **`envoy.filters.http.wasm`** filter into your `http_filters` list in `envoy.yaml`:
+
+```yaml
+# Inside your http_connection_manager settings:
+http_filters:
+  - name: envoy.filters.http.wasm
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+      config:
+        name: "response_transformer_filter"
+        vm_config:
+          # Select the V8 high-performance runtime
+          runtime: "envoy.wasm.runtime.v8"
+          code:
+            local:
+              # Point directly to the compiled WebAssembly binary file
+              filename: "/var/lib/envoy/filters/response_transformer.wasm"
+        # Optional JSON/String config loaded inside your Wasm module
+        configuration:
+          "@type": type.googleapis.com/google.protobuf.StringValue
+          value: |
+            {
+              "override_status": 503
+            }
+
+  # The terminal filter (router) MUST always remain last in the chain
+  - name: envoy.filters.http.router
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+```
+
 ---
 
 ## 🕸️ The Istio Connection
