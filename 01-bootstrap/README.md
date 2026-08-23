@@ -118,6 +118,54 @@ Here is why:
 
 ---
 
+## 🛠️ L7 Header Manipulation & Trusted Client Address (XFF)
+
+In a microservice architecture, Envoy plays a vital role as a gatekeeper that sanitizes and enriches L7 HTTP headers before forwarding requests to your app.
+
+### 1. Header Manipulation: The `X-Forwarded-Client-Cert` (XFCC) Flow
+To let your backend Go app know who is calling it securely, Envoy performs **header manipulation** by extracting details from the client’s TLS certificate and injecting them into the request as an HTTP header:
+
+```yaml
+# Inside the mtls_ingress filter chain config:
+forward_client_cert_details: SANITIZE_SET
+set_current_client_cert_details:
+  uri: true
+```
+
+* **`SANITIZE_SET`**: Envoy strips any untrusted `X-Forwarded-Client-Cert` headers sent from outside, then generates a fresh, verified one.
+* **`uri: true`**: Tells Envoy to inject the client's **SPIFFE ID** URI into the header.
+* **The Go Code Hook**: This is exactly how your Go app in `main.go` safely extracts the caller's identity:
+  ```go
+  xfcc := r.Header.Get("X-Forwarded-Client-Cert")
+  // Extracts "spiffe://proteus.local/service-b" from:
+  // "By=spiffe://proteus.local/service-a;Hash=...;URI=spiffe://proteus.local/service-b"
+  callerID := parseXFCC(xfcc)
+  ```
+
+---
+
+### 🛡️ Preventing IP Spoofing: Trusting Client IPs with `X-Forwarded-For` (XFF)
+
+When traffic goes through multiple load balancers (e.g., **Client ➔ Internet ➔ ALB ➔ Envoy ➔ Go App**), your Go App's `r.RemoteAddr` will always show Envoy's local IP (`127.0.0.1`), losing the real client IP.
+
+To solve this, Envoy appends the client IP to the `X-Forwarded-For` (XFF) header. However, **hackers can spoof this header** by sending fake `X-Forwarded-For` values from the internet. Envoy uses two critical configuration parameters in `http_connection_manager` to prevent this:
+
+```yaml
+# In your ingress http_connection_manager settings:
+use_remote_address: true
+xff_num_trusted_hops: 1
+```
+
+#### How it works:
+1. **`use_remote_address: true`** *(Recommended)*:
+   Instructs Envoy to use the **actual downstream physical IP connection** as the trusted source. It treats that physical connection as a hop and appends it to the incoming `X-Forwarded-For` list.
+2. **`xff_num_trusted_hops: 1`**:
+   Tells Envoy exactly how many trusted proxy hops exist in front of it (e.g., your AWS ALB counts as `1` trusted hop). 
+   * Envoy will traverse the `X-Forwarded-For` list from the right side, skip `1` entry (the trusted ALB's IP), and identify the next address to the left as the **authenticated, un-spoofable client IP**.
+   * Any IP addresses further to the left (which could have been sent by an external attacker to spoof their location) are treated as untrusted.
+
+---
+
 ## 🔌 Dynamic SDS Integration with SPIRE
 
 Rather than loading certificates from static local files (which requires task restarts upon renewal), Envoy uses the **Secret Discovery Service (SDS)** to streams certs dynamically from the **SPIRE Agent** over a shared UDS volume socket.
