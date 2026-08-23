@@ -328,8 +328,70 @@ meshConfig:
 
 *When Istio reads this configuration, the control plane (`istiod`) dynamically handles creating the underlying gRPC channels and Envoy cluster connections across the mesh sidecars.*
 
-### 2. Step 2: Reference it in the Developer Configurations
-Once registered globally as an extension provider named `"my-global-rate-limiter"`, the application developers can reference it using high-level Istio resources without ever dealing with Envoy cluster names!
+### 2. Step 2: Activating the Extension Provider in Developer Configurations
+
+Once `"my-global-rate-limiter"` is registered in `MeshConfig`, application developers do **not** need to write raw cluster names (`outbound|8081||...`) anymore. 
+
+Instead, they reference the friendly name directly inside their workload configurations:
+
+#### 🛠️ Option A: Reference the Provider in a Clean `EnvoyFilter`
+Because the platform team registered the provider globally, the developer’s `EnvoyFilter` can simply reference `my-global-rate-limiter` directly as the target cluster. Istio automatically links it under the hood:
+
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: sms-rate-limiter-activation
+  namespace: namespace-b
+spec:
+  workloadSelector:
+    labels:
+      app: sms-service
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: SIDECAR_INBOUND
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: "envoy.filters.http.router"
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+            domain: go_app_limits
+            rate_limit_service:
+              grpc_service:
+                envoy_grpc:
+                  # ─── REFERENCING THE REGISTERED EXTENSION PROVIDER NAME DIRECTLY! ───
+                  cluster_name: my-global-rate-limiter
+              transport_api_version: V3
+```
+
+#### 🛠️ Option B: Reference the Provider in `WasmPlugin` or Custom Rules
+If your mesh uses custom WebAssembly plugins (like a WASM rate limiter or external auth), the WASM settings block targets the registered provider name:
+
+```yaml
+apiVersion: extensions.istio.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: custom-rate-limit-wasm
+  namespace: namespace-b
+spec:
+  selector:
+    matchLabels:
+      app: sms-service
+  url: oci://my-registry.io/wasm-ratelimit:v1
+  pluginConfig:
+    # WASM directly queries the globally registered rate limiter by name!
+    rate_limit_service: "my-global-rate-limiter"
+```
+
+This completes the entire loop! The platform team owns the infrastructure endpoint (`MeshConfig.extensionProviders`), while developers dynamically attach it to their services using only its friendly name!
 
 ---
 
