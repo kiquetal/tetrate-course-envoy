@@ -1,0 +1,40 @@
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 15000
+
+# ========================================================
+# DYNAMIC RESOURCES (PULLED DYNAMICALLY VIA xDS SERVER)
+# ========================================================
+dynamic_resources:
+  ads_config:
+    api_type: DELTA_GRPC # State-of-the-art incremental updates
+    transport_api_version: V3
+    grpc_services:
+      - envoy_grpc:
+          cluster_name: xds_control_plane
+  cds_config:
+    ads: {} # Discover Clusters using the Aggregated Discovery Service
+  lds_config:
+    ads: {} # Discover Listeners using the Aggregated Discovery Service
+
+# ========================================================
+# STATIC RESOURCES (ONLY INFRASTRUCTURE FOR THE CORE xDS STREAM)
+# ========================================================
+static_resources:
+  clusters:
+    - name: xds_control_plane
+      type: STRICT_DNS
+      connect_timeout: 0.25s
+      lb_policy: ROUND_ROBIN
+      http2_protocol_options: {} # Dynamic xDS must communicate over HTTP/2 (gRPC)
+      load_assignment:
+        cluster_name: xds_control_plane
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: xds-controller.infra.internal
+                      port_value: 18000
