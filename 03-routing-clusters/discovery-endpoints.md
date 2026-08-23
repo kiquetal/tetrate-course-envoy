@@ -8,9 +8,40 @@ This guide breaks down these critical concepts, tracing how they operate in raw 
 
 ## 🧱 The Core Hierarchy: Cluster ➔ Endpoint
 
-In Envoy, traffic flows down a structured pipeline:
+In Envoy, traffic flows down a structured pipeline, where a **Cluster** represents a logical grouping, and the **Endpoints** are the physical, individual backend targets:
+
 ```text
-[ Listener ] ──► [ Route ] ──► [ Cluster ] ──► [ Endpoint ] (Real Server)
+[ Client Request ] ──► [ Listener ] ──► [ Route Match ]
+                                              │
+                                              ▼
+                    +───────────────────────────────────────────────────+
+                    | CLUSTER: "payment-service"                        |
+                    | (Defines Load Balancer & Health Check Policies)   |
+                    |                                                   |
+                    |   +───────────────────────────────────────────+   |
+                    |   | ENDPOINT pool (Collection of instances)   |   |
+                    |   |                                           |   |
+                    |   |   [ Endpoint A: 10.244.0.10:8080 ]        |   |
+                    |   |     ▲                                     |   |
+                    |   |     │ Health Check: OK (200)              |   |
+                    |   |     │ Route Traffic: YES ─────────────────┼───┼──► [ Active Server A ]
+                    |   |                                           |   |
+                    |   |   [ Endpoint B: 10.244.0.11:8080 ]        |   |
+                    |   |     ▲                                     |   |
+                    |   |     │ Health Check: OK (200)              |   |
+                    |   |     │ Route Traffic: YES ─────────────────┼───┼──► [ Active Server B ]
+                    |   |                                           |   |
+                    |   |   [ Endpoint C: 10.244.0.12:8080 ]        |   |
+                    |   |     ▲                                     |   |
+                    |   |     │ Health Check: FAILED (503)          |   |
+                    |   |     │ Route Traffic: NO (EJECTED)         |   |
+                    |   |                                           |   |
+                    |   +───────▲───────────────────────────────────+   |
+                    +───────────┼───────────────────────────────────────+
+                                │
+                        [ Active Probing ]
+                        Envoy periodically sends L7 requests
+                        (e.g. GET /healthz) to all endpoints!
 ```
 
 *   **Cluster**: A logical grouping of upstream hosts/services that perform identical duties (e.g., `payment-service`). The cluster defines connection timeouts, load balancing algorithms (like Round Robin), TLS credentials, and health checking rules.
