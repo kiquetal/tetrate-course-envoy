@@ -123,6 +123,108 @@ route_config:
 
 ---
 
+### 🛠️ Master Template: Fully Complete `envoy.yaml` with Advanced Retry Emphasis
+
+Here is a fully complete `envoy.yaml` that you can read, copy, or write by hand without fear. It highlights how **L7 Retry Policies** are embedded into the routing layer, complete with exponential back-off, timeout constraints, and host-avoidance predicates, backed by a multi-endpoint cluster at the bottom:
+
+```yaml
+# ====================================================================
+# FULLY COMPLETE ENVOY.YAML CONFIGURATION LAYOUT
+# Demonstrating L4 Listener -> L7 HCM Filter -> Advanced L7 Retry Policy -> Multi-Host Cluster
+# ====================================================================
+
+static_resources:
+  listeners:
+    - name: my_http_listener
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 80 # Listen on L4 Port 80
+
+      filter_chains:
+        - filters:
+            # ────────────────────────────────────────────────────────
+            # EXACTLY ONE L4 Network Filter in the L4 chain list!
+            # ────────────────────────────────────────────────────────
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+
+                # ─── SIBLING 1: Routing Map (With Advanced Retries) ───
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: app_service
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/api/unstable" # Matches our unstable endpoints
+                          route:
+                            cluster: app_cluster
+                            timeout: 2.0s # Overall HTTP request deadline
+                            
+                            # ========================================================
+                            # ADVANCED L7 RETRY POLICY
+                            # ========================================================
+                            retry_policy:
+                              # 1. Triggers: Retry on 5xx errors, network timeouts, and HTTP/2 resets
+                              retry_on: "5xx,connect-failure,refused-stream"
+                              
+                              # 2. Limit: Try up to 3 times before declaring a final failure
+                              num_retries: 3
+                              
+                              # 3. Request Cap: Limit each individual attempt to 0.25 seconds
+                              per_try_timeout: 0.25s
+                              
+                              # 4. Back-off Strategy: Exponential delay spacing between tries
+                              retry_back_off:
+                                default_interval: 0.05s # Base delay before try 1 (50ms)
+                                max_interval: 0.5s     # Ceiling cap on delay length (500ms)
+                              
+                              # 5. Host Avoidance: Ensure retries dial a different, healthy host!
+                              retry_host_predicate:
+                                - name: envoy.retry_host_predicates.previous_hosts
+                                  typed_config:
+                                    "@type": type.googleapis.com/envoy.extensions.retry.host.previous_hosts.v3.PreviousHostsPredicate
+                              
+                              # 6. Retry Attempts Selection Threshold
+                              host_selection_retry_max_attempts: 5
+
+                # ─── SIBLING 2: HTTP Processing Stack ───
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.http.router.v3.Router
+
+  # ────────────────────────────────────────────────────────
+  # UPSTREAM CLUSTERS (Defining multiple backend endpoints)
+  # ────────────────────────────────────────────────────────
+  clusters:
+    - name: app_cluster
+      connect_timeout: 0.25s
+      type: STATIC
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: app_cluster
+        endpoints:
+          - lb_endpoints:
+              # Endpoints 1: Instance A
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 10.0.1.5
+                      port_value: 8080
+              # Endpoints 2: Instance B (Allows Host Predicate Avoidance to pick this if A fails)
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 10.0.1.6
+                      port_value: 8080
+```
+
+---
+
 ## 🔀 Request Hedging (Concurrent Outbound Attempts)
 
 **Request Hedging** is an advanced resilience strategy where Envoy proactively sends multiple concurrent requests to different upstream hosts, using whichever host responds first and discarding the slower requests.
