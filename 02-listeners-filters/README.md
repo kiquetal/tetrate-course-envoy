@@ -194,8 +194,22 @@ The built-in `envoy.extensions.http.cache.simple` provider is compiled directly 
 
 #### 2. The Rate Limiter: Distributed & Centralized (gRPC Required)
 Unlike caching, rate-limiting is often a **global** constraint across many scaled instances:
-*   **Where data lives**: In a central **Redis** instance.
-*   **How it queries**: Envoy sidecars must send a high-performance **gRPC check** to a central **Rate Limit Service (RLS)** container, which increments and checks the keys in Redis.
+*   **Where data lives**: In a centralized, external **Redis** cluster.
+*   **How it queries**: Envoy sidecars send a high-performance **gRPC check** to a central **Rate Limit Service (RLS)** container.
+*   **The RLS Container Dual-Configuration**: 
+    To bridge Envoy with Redis, the RLS container itself uses a **two-part configuration**:
+    1.  **`ratelimit.yaml` (The Business Rules)**: Mounts inside the RLS container to define the decision trees and rate ceilings (e.g. `POST /api = 10/min`).
+    2.  **Environment Variables (The Redis Connection)**: Passes to the RLS container during deployment to tell it exactly how to authenticate and talk to your external Redis server:
+        ```yaml
+        # Example RLS Container Deployment Configuration
+        env:
+          - name: REDIS_TYPE
+            value: "standalone" # or "sentinel" or "cluster"
+          - name: REDIS_URL
+            value: "redis://redis-master.infra.svc.cluster.local:6379"
+          - name: REDIS_AUTH
+            value: "my-secure-redis-password"
+        ```
 *   **Why it can't be local**: If Pod A and Pod B only tracked limits in their own local RAM, a client could double their allowed requests by simply alternating calls between the two pods. Shared state is mandatory!
 
 ---
