@@ -301,5 +301,37 @@ The gateway controller automatically merges the developer's rules with the platf
 
 ---
 
+## 🌐 Pure Modern Istio: Configuring the RLS URL inside `MeshConfig`
+
+If you are running **pure modern Istio** (not the Envoy Gateway controller), the underlying Envoy proxies are hidden from you. 
+
+Instead of configuring Envoy-specific clusters or gateways, you define your rate limit service's URL and port **centrally inside the global Istio `MeshConfig` using the `extensionProviders` API!**
+
+### 1. Step 1: Register the RLS Service URL in `MeshConfig`
+The Platform Administrator configures the global `MeshConfig` (typically via Helm values during Istio installation, or by editing the `istio` ConfigMap in the `istio-system` namespace). 
+
+They define the physical Kubernetes DNS URL under **`extensionProviders`**:
+
+```yaml
+# Helm values.yaml (or IstioOperator configuration)
+meshConfig:
+  # ========================================================
+  # REGISTER GLOBAL SERVICE PROVIDERS
+  # ========================================================
+  extensionProviders:
+    - name: "my-global-rate-limiter" # ◄── Friendly name for developers to reference!
+      envoyRateLimit:
+        service: "ratelimit-service.infra.svc.cluster.local" # ◄── The physical DNS URL!
+        port: 8081
+        timeout: 0.25s
+```
+
+*When Istio reads this configuration, the control plane (`istiod`) dynamically handles creating the underlying gRPC channels and Envoy cluster connections across the mesh sidecars.*
+
+### 2. Step 2: Reference it in the Developer Configurations
+Once registered globally as an extension provider named `"my-global-rate-limiter"`, the application developers can reference it using high-level Istio resources without ever dealing with Envoy cluster names!
+
+---
+
 
 
