@@ -41,6 +41,8 @@ Ensure all code edits or new additions respect this structure:
 ## 📝 Best Practices for the Agent
 *   **Do not bloat configs**: Keep JSON/YAML examples modular and minimal to demonstrate the specific concept being studied.
 *   **Focus on explanation**: Always accompany configurations with brief, bulleted summaries explaining *why* a certain filter, cluster, or route is configured that way.
+*   **Commit in Blocks**: Always stage and commit changes to Git in clean, logical, granular blocks (e.g., separate commits for rule changes, config guides, etc.) rather than a single massive commit.
+
 
 ---
 
