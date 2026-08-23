@@ -178,3 +178,37 @@ Instead of reloading Envoy:
    }
    ```
 4. Envoy receives this tiny packet, updates its internal cluster hash ring in microseconds, and begins routing traffic to the new task immediately. **Zero config restarts, zero connection drops, and zero network packet overhead!** 🛡️🚀⚡
+
+---
+
+## 🔑 5. Identifying Envoy to the Control Plane: The `node` Identifier
+
+When Envoy connects to the control plane, the control plane needs to know exactly which container sidecar is calling so it can deliver a customized configuration. This is handled by the **`node`** block configured at the **root level** of your bootstrap config.
+
+### ⚙️ Bootstrap node configuration block:
+```yaml
+node:
+  id: "fargate-task-849a2d3c"       # Unique instance ID (e.g. dynamic container Task UUID)
+  cluster: "sms-service"            # Logical service name
+  locality:
+    region: "us-east-1"             # Enables AZ-local routing
+    zone: "us-east-1a"
+  metadata:                         # Custom metadata parameters
+    environment: "production"
+    namespace: "namespace-b"
+```
+
+### ⚡ Dynamic Overriding in AWS Fargate (SRE Best Practice)
+Since Fargate task IDs are dynamic and change on every redeployment, you should never hardcode the `id` or `cluster` inside the static bootstrap template file.
+
+Instead, keep the bootstrap file generic and use **Envoy Command-Line arguments** to override them dynamically inside the Fargate task's container launch commands:
+
+```bash
+envoy --config-path /etc/envoy/envoy-dynamic.yaml \
+      --service-cluster sms-service \
+      --service-node fargate-task-uuid-12345
+```
+
+*   **`--service-cluster`**: Overrides the logical `node.cluster` identifier.
+*   **`--service-node`**: Overrides the instance-specific `node.id` identifier.
+

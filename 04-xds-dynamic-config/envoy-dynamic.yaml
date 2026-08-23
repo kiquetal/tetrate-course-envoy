@@ -1,8 +1,19 @@
+node:
+  id: "fargate-task-849a2d3c"       # Unique instance ID (often overridden dynamically via --service-node CLI flag)
+  cluster: "sms-service"            # Logical service cluster name (can be overridden via --service-cluster CLI flag)
+  locality:
+    region: "us-east-1"
+    zone: "us-east-1a"
+  metadata:
+    environment: "production"
+    namespace: "namespace-b"
+
 admin:
   address:
     socket_address:
       address: 127.0.0.1
       port_value: 15000
+
 
 # ========================================================
 # DYNAMIC RESOURCES (PULLED DYNAMICALLY VIA xDS SERVER)
