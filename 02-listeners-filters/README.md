@@ -89,16 +89,30 @@ If you want to add multiple HTTP filters (like checking a **JWT Token**, running
 You keep a **single, unified HTTP Connection Manager** (L4 Network filter), and simply stack the new L7 filters sequentially inside its **`http_filters`** list:
 
 ```yaml
+# ====================================================================
+# FULLY COMPLETE ENVOY.YAML CONFIGURATION LAYOUT
+# Demonstrating L4 Listener -> Single L4 HCM Filter -> L7 Stack -> Upstream Cluster
+# ====================================================================
+
 static_resources:
   listeners:
     - name: my_listener
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 80 # Listen on L4 Port 80
+
       filter_chains:
         - filters:
-            # 1. You configure the HTTP Connection Manager EXACTLY ONCE
+            # ────────────────────────────────────────────────────────
+            # EXACTLY ONE L4 Network Filter in the L4 chain list!
+            # ────────────────────────────────────────────────────────
             - name: envoy.filters.network.http_connection_manager
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: ingress_http
+                
+                # --- SIBLING 1: L7 Routing Map ---
                 route_config:
                   name: local_route
                   virtual_hosts:
@@ -106,22 +120,22 @@ static_resources:
                       domains: ["*"]
                       routes:
                         - match: { prefix: "/" }
-                          route: { cluster: local_app }
+                          route:
+                            cluster: local_app  # ◄── Maps to Cluster defined below!
 
-                # 2. You simply stack all your L7 filters sequentially here:
+                # --- SIBLING 2: L7 Sequential Processing Stack ---
                 http_filters:
-                  # --- HTTP FILTER 1: Check CORS ---
+                  # --- HTTP FILTER 1: CORS Policy check ---
                   - name: envoy.filters.http.cors
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
 
-                  # --- HTTP FILTER 2: Validate JWT Tokens ---
+                  # --- HTTP FILTER 2: Validate OAuth2 / JWT Tokens ---
                   - name: envoy.filters.http.jwt_authn
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
-                      # (your JWT verification rules go here)
 
-                  # --- HTTP FILTER 3: Run Lua Script ---
+                  # --- HTTP FILTER 3: Execute Custom Lua Scripts ---
                   - name: envoy.filters.http.lua
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
@@ -131,10 +145,28 @@ static_resources:
                             response_handle:headers():add("x-custom-jwt-verified", "true")
                           end
 
-                  # --- TERMINAL FILTER: Route the request ---
+                  # --- TERMINAL HTTP FILTER: Route the request sideways ---
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  # ────────────────────────────────────────────────────────
+  # UPSTREAM CLUSTERS DEFINITION (At root level of static_resources)
+  # ────────────────────────────────────────────────────────
+  clusters:
+    - name: local_app
+      connect_timeout: 0.25s
+      type: STATIC
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: local_app
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 8080 # The local Go App destination (Upstream)
 ```
 
 ---
