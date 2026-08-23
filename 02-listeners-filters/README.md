@@ -181,6 +181,74 @@ graph TD
   * You place it **after** JWT validation because you don't want to make an expensive network call to your external auth service if the JWT is invalid or expired.
   * You place it **before** the **Router filter** because the Router is always the terminal filter that completes the chain by forwarding the request upstream.
 
+## 🔄 L7 Upstream Response & Local Reply Transformation
+
+Envoy allows you to dynamically intercept, modify, or rewrite responses sent by upstream servers (or generated locally by Envoy itself) based on HTTP status codes. There are three common ways to achieve this:
+
+### 1. Header Manipulation based on Response Codes
+You can append, rewrite, or inject HTTP headers based on upstream responses at the Route or Virtual Host level:
+```yaml
+route_config:
+  virtual_hosts:
+    - name: backend_service
+      domains: ["*"]
+      routes:
+        - match: { prefix: "/" }
+          route:
+            cluster: local_app
+            # Dynamic header injection using Envoy formatting specifiers:
+            response_headers_to_add:
+              - header:
+                  key: "x-upstream-status"
+                  value: "%RESPONSE_CODE%"
+              - header:
+                  key: "x-response-flags"
+                  value: "%RESPONSE_FLAGS%"
+```
+
+### 2. Local Reply Modification (`local_reply_config`)
+When Envoy itself rejects a request (e.g., a `503 Service Unavailable` due to cluster connection failure, or a `403 Forbidden` from RBAC), you can use `local_reply_config` inside the `http_connection_manager` to catch the error code and map it to a custom response payload or custom headers:
+```yaml
+local_reply_config:
+  mappers:
+    - filter:
+        status_code_filter:
+          comparison:
+            op: EQ
+            value: 503
+      headers_to_add:
+        - header:
+            key: "x-custom-fallback"
+            value: "active"
+      body_format_override:
+        text_format: "Our backend cluster is experiencing high load. Please try again shortly."
+```
+
+### 3. Lightweight Response Rewriting using the Lua Filter
+If you need dynamic script-based response modification (for example, converting an upstream `500 Internal Server Error` into a clean, client-facing `503 Service Unavailable` with customized headers), you can configure the built-in HTTP **Lua Filter**:
+```yaml
+http_filters:
+  - name: envoy.filters.http.lua
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+      default_source_code:
+        inline_string: |
+          function envoy_on_response(response_handle)
+            -- 1. Read upstream status code
+            local status = response_handle:headers():get(":status")
+            
+            -- 2. If status is a 500 server error, modify the response
+            if status == "500" then
+              response_handle:headers():replace(":status", "503")
+              response_handle:headers():add("x-rewritten-by", "envoy-lua")
+              response_handle:body():setBytes("The backend returned an error. Converted to a clean 503 response.")
+            end
+          end
+  - name: envoy.filters.http.router
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+```
+
 ---
 
 ## 🕸️ The Istio Connection
