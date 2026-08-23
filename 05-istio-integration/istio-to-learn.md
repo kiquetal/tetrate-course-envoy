@@ -136,7 +136,9 @@ spec:
             rate_limit_service:
               grpc_service:
                 envoy_grpc:
-                  # Tells Envoy to dial the RLS service running in your cluster
+                  # Tells Envoy to dial the RLS service running in your cluster.
+                  # 🔗 This maps to the EXACT SAME Lyft RLS gRPC container we defined in Chapter 03,
+                  # which consumes ratelimit.yaml rules and connects to the external Redis server!
                   cluster_name: outbound|8081||ratelimit-service.infra.svc.cluster.local
               transport_api_version: V3
 
