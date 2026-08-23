@@ -578,6 +578,121 @@ descriptors:
 
 ---
 
+### 🛠️ Master Template: Fully Complete `envoy.yaml` with Global Rate Limiting
+
+Here is the fully complete, unified `envoy.yaml` showing exactly how the **L7 Rate Limit Filter**, **Route Extraction Actions**, and the **gRPC Cluster** connect together inside a single, valid configuration layout:
+
+```yaml
+# ====================================================================
+# FULLY COMPLETE ENVOY.YAML CONFIGURATION LAYOUT
+# Demonstrating L4 Listener -> L7 HCM Filter -> Route Actions -> RLS gRPC Cluster
+# ====================================================================
+
+static_resources:
+  listeners:
+    - name: my_http_listener
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 80 # Listen on L4 Port 80
+
+      filter_chains:
+        - filters:
+            # ────────────────────────────────────────────────────────
+            # EXACTLY ONE L4 Network Filter in the L4 chain list!
+            # ────────────────────────────────────────────────────────
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+
+                # ─── SIBLING 1: Routing Map & Actions ───
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend_service
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            path: "/api"
+                            headers:
+                              - name: ":method"
+                                exact_match: "POST"
+                          route:
+                            cluster: local_app
+                            
+                            # ========================================================
+                            # ACTION DESCRIPTORS EXTRACTION
+                            # ========================================================
+                            rate_limits:
+                              - actions:
+                                  # Action 1: Extract HTTP Method
+                                  - request_headers:
+                                      header_name: ":method"
+                                      descriptor_key: "http_method"
+                                  # Action 2: Extract Path
+                                  - request_headers:
+                                      header_name: ":path"
+                                      descriptor_key: "http_path"
+
+                # ─── SIBLING 2: HTTP Processing Stack ───
+                http_filters:
+                  # ========================================================
+                  # L7 GLOBAL RATE LIMIT FILTER REGISTRATION
+                  # ========================================================
+                  - name: envoy.filters.http.ratelimit
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+                      domain: my_api_limits
+                      rate_limit_service:
+                        grpc_service:
+                          envoy_grpc:
+                            cluster_name: global_rate_limiter # ◄── Points to the cluster below
+                        transport_api_version: V3
+
+                  # --- TERMINAL FILTER ---
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.http.router.v3.Router
+
+  # ────────────────────────────────────────────────────────
+  # UPSTREAM CLUSTERS
+  # ────────────────────────────────────────────────────────
+  clusters:
+    # Cluster A: Your local backend Application
+    - name: local_app
+      connect_timeout: 0.25s
+      type: STATIC
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: local_app
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 8080
+
+    # Cluster B: Centralized gRPC Rate Limit Service (RLS)
+    - name: global_rate_limiter
+      connect_timeout: 0.25s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      http2_protocol_options: {} # ◄── CRITICAL: Must use HTTP/2 for gRPC stream!
+      load_assignment:
+        cluster_name: global_rate_limiter
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ratelimit-service.infra.svc.cluster.local
+                      port_value: 8081 # The gRPC port of RLS
+```
+
+---
+
 ## 🧱 Component Roles & Physical Architecture
 
 To fully understand how global rate limiting resolves distributed state in Kubernetes, it helps to understand the exact division of duties and physical network path.
