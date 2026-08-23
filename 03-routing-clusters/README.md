@@ -286,9 +286,102 @@ route_config:
 
 ---
 
+---
+
 ### 🎯 Key Architectural Benefits in Kubernetes:
 1. **Perfect Accuracy**: Enforces a strict limit across all pods collectively, regardless of how Kubernetes load-balances requests across endpoints.
 2. **Zero App Overhead**: Your Go Application container is never aware of the rate limiter; Envoy blocks invalid requests (`429 Too Many Requests`) at the proxy level, saving your app container's CPU/memory resources entirely.
 3. **Fail-Open Strategy**: You can configure Envoy's Rate Limit filter to **fail-open** (`failure_mode_deny: false`). If the centralized Redis or RLS deployment goes down, Envoy will allow requests to pass directly to your app rather than throwing errors to your users.
+
+---
+
+## 🧪 Deep Dive Example: Rate Limiting `POST /api` with Actions & Descriptors
+
+Let's look at a concrete, production scenario: You want to limit **`POST`** requests to your **`/api`** endpoint (e.g. max 10 requests per minute) to protect a database write-path from abuse.
+
+To do this, you must configure:
+1. **Envoy Actions**: Instructs the Envoy proxy how to inspect the incoming HTTP headers and generate a descriptor block.
+2. **RLS Descriptors**: The corresponding rules running in your external Global Rate Limit Service telling it how to match those keys and what rate capacity to enforce.
+
+---
+
+### 1. The Request (Downstream to Envoy)
+A client sends a write request:
+* **HTTP Method**: `POST`
+* **Path**: `/api`
+
+---
+
+### 2. The Envoy Configuration (Generating the Descriptors)
+In `envoy.yaml`, you configure the route matching `/api` and define the extraction **actions**:
+
+```yaml
+route_config:
+  name: local_route
+  virtual_hosts:
+    - name: backend_service
+      domains: ["*"]
+      routes:
+        - match:
+            path: "/api"
+            headers:
+              - name: ":method"
+                exact_match: "POST"
+          route:
+            cluster: local_app
+            # ========================================================
+            # Define how Envoy generates the rate limit key structure
+            # ========================================================
+            rate_limits:
+              - actions:
+                  # Action 1: Extract the HTTP Method header
+                  - request_headers:
+                      header_name: ":method"
+                      descriptor_key: "http_method"
+                  # Action 2: Extract the target Path header
+                  - request_headers:
+                      header_name: ":path"
+                      descriptor_key: "http_path"
+```
+
+#### How Envoy processes this:
+1. The incoming request matches the route path `/api` and HTTP method `POST`.
+2. Envoy runs **Action 1** ➔ reads `:method` value `POST` ➔ generates descriptor pair `http_method=POST`.
+3. Envoy runs **Action 2** ➔ reads `:path` value `/api` ➔ generates descriptor pair `http_path=/api`.
+4. Envoy combines these into an **ordered descriptor list** and fires it over the high-performance gRPC channel to the RLS:
+   ```json
+   [
+     {"key": "http_method", "value": "POST"},
+     {"key": "http_path", "value": "/api"}
+   ]
+   ```
+
+---
+
+### 3. The Rate Limit Service (RLS) Rule Configuration
+In your centralized Rate Limit Service config file (which defines rules mapped to Redis counters), you write the matching rule hierarchy. 
+
+**Order is critical!** The keys must align exactly with the list structure sent by Envoy:
+
+```yaml
+domain: my_api_limits
+descriptors:
+  - key: http_method
+    value: POST
+    descriptors:
+      - key: http_path
+        value: /api
+        rate_limit:
+          unit: MINUTE
+          requests_per_unit: 10 # Only allows 10 requests per minute!
+```
+
+### 🔁 The End-to-End Resolution:
+1. **Client** hits the gateway with `POST /api`.
+2. **Envoy** builds the structured list: `[http_method=POST, http_path=/api]`.
+3. **RLS** receives this, traverses its nested rules, matches `http_method=POST` ➔ `http_path=/api`, and queries Redis.
+4. **Redis** increments the counter. If the counter exceeds `10` in that minute interval, the RLS returns `OVER_LIMIT` to Envoy.
+5. **Envoy** immediately terminates the connection, returning a `429 Too Many Requests` status code back to the client.
+
 
 ```
