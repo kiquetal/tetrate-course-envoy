@@ -52,6 +52,72 @@ The configuration defines three specialized listeners to isolate traffic types a
 
 ---
 
+## 🗺️ L7 Virtual Hosts & Route Configurations
+
+To match and steer HTTP requests, Envoy uses **Virtual Hosts** inside the listener's `http_connection_manager`. Here is the concrete YAML structure used in the Fargate template:
+
+### 1. Ingress Virtual Host Matching (Plaintext & mTLS)
+Both ingress listeners map incoming connections using this structure:
+```yaml
+route_config:
+  name: local_route
+  virtual_hosts:
+    - name: local_service
+      domains: ["*"]                   # 1. Match any 'Host' header domain
+      routes:
+        - match: { prefix: "/" }       # 2. Match any URL path
+          route: { cluster: local_app } # 3. Send to local Go app cluster (127.0.0.1:8080)
+```
+
+### 2. Egress Virtual Host Matching
+The egress listener (intercepting your app's outbound calls) uses this structure:
+```yaml
+route_config:
+  name: peer_route
+  virtual_hosts:
+    - name: peer_service
+      domains: ["*"]
+      routes:
+        - match: { prefix: "/" }
+          route: { cluster: peer_service } # Send to peer's address (${PEER_ADDRESS}:9902)
+```
+
+---
+
+## 🔄 Critical Flow: Does the Go App Call `localhost:9902`?
+
+**No. The Go App must NEVER call `localhost:9902`.** This is a common point of confusion. 
+
+Here is why:
+* **Port `9902` is the secure Mesh Ingress**: It requires an incoming TLS handshake presenting a valid SPIFFE client certificate. Your Go app does not have a client certificate (Envoy manages that). If your Go app attempts to call `localhost:9902`, the connection will be **rejected** immediately by Envoy.
+* **Port `9903` is the Mesh Egress**: Your Go app must call **`localhost:9903`** over plain HTTP. 
+
+### The Real End-to-End Inter-Service Flow:
+
+```
+[ Service A Task ]                                       [ Service B Task ]
+ ┌──────────────┐                                         ┌──────────────┐
+ │  Go App A    │                                         │  Go App B    │
+ └──────┬───────┘                                         └──────▲───────┘
+        │ 1. http.Get("http://localhost:9903/data")              │ 5. plaintext HTTP
+        ▼ (plaintext HTTP)                                       │    to port :8080
+ ┌──────────────┐                                         ┌──────┴───────┐
+ │ Envoy Egress │                                         │ Envoy Ingress│
+ │   (:9903)    │                                         │   (:9902)    │
+ └──────┬───────┘                                         └──────▲───────┘
+        │ 2. Envoy wraps in mTLS                                 │ 4. Envoy validates cert
+        │    presents A's SPIFFE cert                            │    and strips mTLS
+        └───────────────── 3. SECURE NETWORK mTLS ───────────────┘
+                           dials Service B on port :9902
+```
+
+1. **Go App A** dials **`http://localhost:9903/data`** (Outbox).
+2. **Envoy A (:9903)** intercepts, wraps the request in mTLS, and attaches A's SPIFFE client certificate.
+3. **Envoy A** opens a network socket to **Service B's IP address on port `9902`** (Inbox).
+4. **Envoy B (:9902)** accepts the connection, validates Service A's SPIFFE certificate, strips the mTLS encryption, and forwards a plain HTTP request to **Go App B (:8080)**.
+
+---
+
 ## 🔌 Dynamic SDS Integration with SPIRE
 
 Rather than loading certificates from static local files (which requires task restarts upon renewal), Envoy uses the **Secret Discovery Service (SDS)** to streams certs dynamically from the **SPIRE Agent** over a shared UDS volume socket.
