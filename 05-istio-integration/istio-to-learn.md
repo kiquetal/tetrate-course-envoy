@@ -261,5 +261,45 @@ spec:
 2. **Compile-Time Validation**: Kubernetes validates the fields (like `requests` or `unit`) immediately during `kubectl apply`, avoiding runtime Envoy failures.
 3. **Upgrade Proof**: Since this uses Gateway API standards, it will not break when you upgrade your underlying Istio versions!
 
+---
+
+## ⚙️ Separation of Concerns: Where is the RLS Service Configured?
+
+If developers only write lightweight, simple `RateLimitPolicy` manifests, **where is the connection to the actual gRPC Rate Limit Service (RLS) configured?**
+
+This is where the power of modern **Gateway API Architecture** shines, establishing a clean **Separation of Concerns**:
+
+### 1. The Platform/Infra Team (Global Configuration)
+The platform team configures the gateway controller once globally using the **`EnvoyProxy`** resource (which configures the gateway's underlying Envoy bootstrap template). This is where they register the gRPC RLS server and its endpoint settings:
+
+```yaml
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: global-gateway-config
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+  # ========================================================
+  # REGISTER THE GLOBAL RATE LIMIT SERVICE ENDPOINT
+  # ========================================================
+  globalRateLimit:
+    grpcService:
+      host: ratelimit-service.infra.svc.cluster.local # ◄── Points to our Lyft RLS Service!
+      port: 8081
+      # Optional: Connection timeouts, TLS settings, and retry rules
+      timeout: 0.25s
+```
+
+Once defined, this `EnvoyProxy` is linked to the **`GatewayClass`** configuration so all spawned gateways automatically know where the RLS gRPC daemon resides.
+
+### 2. The Application Developer (Service-Specific Policies)
+The application team does **not** need to know where the RLS service is, what namespace it is in, or how to write gRPC cluster definitions. They simply deploy the standard **`RateLimitPolicy`** we wrote above, targeting their own `HTTPRoute`! 
+
+The gateway controller automatically merges the developer's rules with the platform's global RLS service definition under the hood.
+
+---
+
 
 
