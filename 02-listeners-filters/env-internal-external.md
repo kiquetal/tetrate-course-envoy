@@ -62,17 +62,19 @@ typed_config:
 
 When a request arrives at Envoy, the header looks like this:
 ```text
-X-Forwarded-For: 203.0.113.5 (Real Client), 198.51.100.10 (Spoofed), 10.0.1.50 (ALB)
+X-Forwarded-For: 198.51.100.10 (Spoofed), 203.0.113.5 (Real Client)
 Remote TCP Connection IP: 10.0.1.50 (ALB)
 ```
+*(Note: Because the real client connected to the ALB, the ALB automatically appended the real client's IP `203.0.113.5` to the far right of the incoming `X-Forwarded-For` header list before routing it to Envoy).*
 
 With `xff_num_trusted_hops: 1`, Envoy processes the address list **from right to left**:
 
-1.  **Hop 0 (TCP Remote IP)**: `10.0.1.50` (The Load Balancer IP). This IP is trusted because it matches our hop counts.
-2.  **Hop 1 (First IP in XFF from the right)**: `198.51.100.10`. Because `xff_num_trusted_hops` is `1`, Envoy trusts this proxy to have forwarded the preceding IP.
-3.  **The Result**: Envoy extracts the next IP to the left: **`203.0.113.5`**.
+1.  **Hop 0 (TCP Remote IP)**: `10.0.1.50` (The ALB) ➔ **Trusted**.
+2.  **Hop 1 (1st entry in XFF from the right)**: **`203.0.113.5`** (The Real Client) ➔ **Trusted**.
 
-This resolved IP (`203.0.113.5`) becomes the official **Trusted Client Address**!
+Because `xff_num_trusted_hops` is configured to exactly `1`, Envoy's trust boundary stops at **Hop 1**. 
+
+Therefore, **`203.0.113.5`** is extracted directly as the **Trusted Client Address**! Envoy completely ignores anything to the left of Hop 1 (such as the spoofed `198.51.100.10`), rendering the spoofing attempt harmless.
 
 ---
 
