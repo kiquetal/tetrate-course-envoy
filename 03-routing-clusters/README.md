@@ -1,0 +1,159 @@
+# 🔁 Envoy Routing & Resilience: Retry Policies & Hedging
+
+This guide details Envoy’s built-in L7 resilience features, focusing on **Retry Policies**, **Retry Budgets**, **Host Selection Predicates during retries**, and **Request Hedging**.
+
+---
+
+## 🗺️ Retry Policy Hierarchy & Precedence
+
+Resilience in Envoy can be declared at two levels of L7 routing hierarchy:
+
+1. **Virtual Host Level**: Applies as the baseline retry policy for *all* routes defined under that virtual host.
+2. **Route Level**: Overrides the virtual host's policy completely.
+
+> [!WARNING]
+> If a route-level retry policy is declared, it is treated **completely separately**. It **does not inherit** any values or fallbacks from the virtual host-level retry policy.
+
+No matter where it is declared, the structural schema for configuring retries in your `envoy.yaml` remains identical. In addition to static configuration, clients can dynamically request specific retry behaviors via request headers (e.g., using the `x-envoy-retry-on` header).
+
+---
+
+## ⚙️ Core Configuration Parameters
+
+Within the `retry_policy` block, you can configure the following resilience dials:
+
+### 1. Maximum Number of Retries
+* **Default Interval**: Envoy uses an **exponential backoff** algorithm by default to calculate intervals between retries.
+* **Header Override**: You can override retry intervals dynamically per request using headers like `x-envoy-upstream-rq-per-try-timeout-ms`.
+* **Bounded Retries**: All retry attempts are strictly bounded by the overall request timeout configured under `request_timeout`. If the overall request timer expires, all active retry attempts are cancelled immediately.
+* **Default Count**: If a retry policy is declared without specifying a limit, Envoy defaults the number of retries to **one**.
+
+### 2. Retry Budgets
+A retry budget defines a limit on concurrent retry requests in relation to active requests. This acts as a circuit breaker for retries, preventing **retry storms** from overwhelming downstream services when they are already experiencing cascading failures.
+
+### 3. Host Selection Retry Plugins
+Normally, retries follow the same load-balancing host selection logic as the original request. However, if a host just failed, you often want to avoid retrying that same host. 
+By utilizing **host selection predicates**, you can tell Envoy to reject specific hosts during retry rounds and force a re-selection. Common plugins include:
+* `envoy.retry_host_predicates.previous_hosts`: Keeps track of previously attempted hosts and rejects them so retries are spread to healthy endpoints.
+* `envoy.retry_host_predicates.canary_hosts`: Rejects hosts marked as canary (e.g., `canary: true` metadata) to avoid hitting experimental instances.
+
+---
+
+## 🧪 Concrete Retry Configuration Examples
+
+Here are concrete, production-ready examples demonstrating how retry policies are declared.
+
+### Example A: Basic 5xx Upstream Retry Policy
+Matching the `/status/500` path on a backend `httpbin` cluster:
+
+```yaml
+route_config:
+  name: 5xx_route
+  virtual_hosts:
+    - name: httpbin
+      domains: ["*"]
+      routes:
+        - match:
+            path: "/status/500"
+          route:
+            cluster: httpbin
+            # ========================================================
+            # Route-level Retry Policy
+            # ========================================================
+            retry_policy:
+              retry_on: "5xx"      # Retry condition: any 5xx response code
+              num_retries: 5       # Max retries before returning failure
+```
+
+#### 📊 Understanding the Log Output:
+If a client issues a request to `/status/500`, the request eventually fails with a `500` error once all retry budgets are exhausted. Envoy will write a line to its access log resembling:
+
+```text
+[2026-08-23T18:43:29.515Z] "GET /status/500 HTTP/1.1" 500 URX 0 0 269 269 "-" "curl/7.64.0" "1ae9ffe2-21f2-43f7-ab80-79be4a95d6d4" "localhost:10000" "127.0.0.1:5000"
+```
+
+* **`500`**: The HTTP response code returned to the client.
+* **`URX`**: The **Envoy Response Flag** explaining the failure rationale. 
+  * `URX` means that Envoy terminated the request because the **Upstream Retry limit was reached (or the Request budget was eXceeded)**.
+
+---
+
+## 📋 Retry Conditions (`retry_on`) Reference
+
+The `retry_on` configuration string can accept one or more conditions, separated by a comma:
+
+| Retry Condition (`retry_on`) | Description |
+| :--- | :--- |
+| **`5xx`** | Retry on any 5xx response code, or if the upstream doesn't respond (includes connect-failure and refused-stream). |
+| **`gateway-error`** | Retry specifically on `502 Bad Gateway`, `503 Service Unavailable`, or `504 Gateway Timeout` response codes. |
+| **`reset`** | Retry if the upstream resets the TCP connection or doesn't respond at all. |
+| **`connect-failure`** | Retry if the connection to the upstream server fails (e.g. connection timeout). |
+| **`envoy-ratelimited`** | Retry if the `x-envoy-ratelimited` header is present in the upstream response. |
+| **`retriable-4xx`** | Retry if the upstream responds with a retriable 4xx response code (currently, HTTP `409 Conflict` only). |
+| **`refused-stream`** | Retry if the upstream resets the HTTP/2 or HTTP/3 stream with a `REFUSED_STREAM` error code. |
+| **`retriable-status-codes`** | Retry if the upstream response matches status codes defined dynamically in the `x-envoy-retriable-status-codes` request header. |
+| **`retriable-headers`** | Retry if upstream response includes headers matching names defined in the `x-envoy-retriable-header-names` request header. |
+
+---
+
+### Example B: Host Predicate Avoidance Retry Configuration
+This setup uses the `previous_hosts` predicate to ensure retries do not attempt to contact the same failed host twice, trying up to 5 times to pick a new endpoint:
+
+```yaml
+route_config:
+  name: 5xx_route
+  virtual_hosts:
+    - name: httpbin
+      domains: ["*"]
+      routes:
+        - match:
+            path: "/status/500"
+          route:
+            cluster: httpbin
+            retry_policy:
+              retry_on: "5xx"
+              num_retries: 5
+              # ========================================================
+              # Avoid sending retries to the previously failed host
+              # ========================================================
+              retry_host_predicate:
+                - name: envoy.retry_host_predicates.previous_hosts
+              host_selection_retry_max_attempts: 5
+```
+
+---
+
+## 🔀 Request Hedging (Concurrent Outbound Attempts)
+
+**Request Hedging** is an advanced resilience strategy where Envoy proactively sends multiple concurrent requests to different upstream hosts, using whichever host responds first and discarding the slower requests.
+
+> [!CAUTION]
+> Hedging should **only** be configured for **idempotent requests** (e.g., safe HTTP `GET` calls) where making the same request multiple times has no side effects on your backend databases.
+
+### How Hedging Works in Envoy:
+* Envoy performs hedging in response to **per-try timeouts**. 
+* When the initial outbound request times out, Envoy fires off a retry request *without* cancelling the original request.
+* Both requests run concurrently. Envoy forwards the first successful response to the downstream client.
+
+### Example C: Configuring Hedging at the Virtual Host Level
+
+You enable hedging by setting `hedge_on_per_try_timeout` to `true` inside a `hedge_policy` block:
+
+```yaml
+route_config:
+  name: 5xx_route
+  virtual_hosts:
+    - name: httpbin
+      domains: ["*"]
+      # ========================================================
+      # Virtual Host Hedging Policy
+      # ========================================================
+      hedge_policy:
+        hedge_on_per_try_timeout: true
+      routes:
+        - match:
+            prefix: "/api/idempotent"
+          route:
+            cluster: httpbin
+            timeout: 0.5s
+```
