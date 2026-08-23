@@ -41,3 +41,11 @@ Ensure all code edits or new additions respect this structure:
 ## 📝 Best Practices for the Agent
 *   **Do not bloat configs**: Keep JSON/YAML examples modular and minimal to demonstrate the specific concept being studied.
 *   **Focus on explanation**: Always accompany configurations with brief, bulleted summaries explaining *why* a certain filter, cluster, or route is configured that way.
+
+---
+
+## 🎓 Learning & Feedback Loop (Active Challenger Mode)
+*   **Review User Notes**: Whenever the user adds, edits, or shows you their notes or configurations in the repository, thoroughly review them for accuracy.
+*   **Challenge Misunderstandings**: If the user has misunderstood a concept (e.g., downstream vs. upstream routing, filter-chain ordering, or mTLS boundary interception), **proactively point it out**.
+*   **Use Diagram Explanations**: Always back up your corrections or conceptual explanations using clear visual diagrams (such as Mermaid sequence diagrams or flowcharts) to help the user visualize the network/application behavior.
+
