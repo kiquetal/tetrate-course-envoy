@@ -95,11 +95,11 @@ Here is why:
 ### The Real End-to-End Inter-Service Flow:
 
 ```
-[ Service A Task ]                                       [ Service B Task ]
+ [ Service A Task ]                                       [ Service B Task ]
  ┌──────────────┐                                         ┌──────────────┐
  │  Go App A    │                                         │  Go App B    │
  └──────┬───────┘                                         └──────▲───────┘
-        │ 1. http.Get("http://localhost:9903/data")              │ 5. plaintext HTTP
+        │ 1. http.Get("http://localhost:9903/api/data")          │ 5. plaintext HTTP
         ▼ (plaintext HTTP)                                       │    to port :8080
  ┌──────────────┐                                         ┌──────┴───────┐
  │ Envoy Egress │                                         │ Envoy Ingress│
@@ -111,7 +111,7 @@ Here is why:
                            dials Service B on port :9902
 ```
 
-1. **Go App A** dials **`http://localhost:9903/data`** (Outbox).
+1. **Go App A** dials **`http://localhost:9903/api/data`** (Outbox).
 2. **Envoy A (:9903)** intercepts, wraps the request in mTLS, and attaches A's SPIFFE client certificate.
 3. **Envoy A** opens a network socket to **Service B's IP address on port `9902`** (Inbox).
 4. **Envoy B (:9902)** accepts the connection, validates Service A's SPIFFE certificate, strips the mTLS encryption, and forwards a plain HTTP request to **Go App B (:8080)**.
