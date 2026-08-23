@@ -82,6 +82,72 @@ The **Router Filter** acts as the dynamic bridge. Once the request successfully 
 
 ---
 
+### 🛠️ Stacking Filters: How to Add More Filters (Without Repeating the HCM!)
+
+If you want to add multiple HTTP filters (like checking a **JWT Token**, running a **CORS check**, and executing a **Lua Script** on the same route), **you do NOT repeat the `http_connection_manager`!**
+
+You keep a **single, unified HTTP Connection Manager** (L4 Network filter), and simply stack the new L7 filters sequentially inside its **`http_filters`** list:
+
+```yaml
+static_resources:
+  listeners:
+    - name: my_listener
+      filter_chains:
+        - filters:
+            # 1. You configure the HTTP Connection Manager EXACTLY ONCE
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend_service
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: local_app }
+
+                # 2. You simply stack all your L7 filters sequentially here:
+                http_filters:
+                  # --- HTTP FILTER 1: Check CORS ---
+                  - name: envoy.filters.http.cors
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
+
+                  # --- HTTP FILTER 2: Validate JWT Tokens ---
+                  - name: envoy.filters.http.jwt_authn
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+                      # (your JWT verification rules go here)
+
+                  # --- HTTP FILTER 3: Run Lua Script ---
+                  - name: envoy.filters.http.lua
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        inline_string: |
+                          function envoy_on_response(response_handle)
+                            response_handle:headers():add("x-custom-jwt-verified", "true")
+                          end
+
+                  # --- TERMINAL FILTER: Route the request ---
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+```
+
+---
+
+### ⚠️ What happens if you omit the `router` filter?
+
+If you do not include the **`envoy.filters.http.router`** filter at the end of the `http_filters` list:
+
+1. **Configuration Failure**: Envoy will fail to pass schema validation and will **refuse to start** (throwing a startup error stating that a terminal filter is missing).
+2. **No Destination**: Without the Router, Envoy has no mechanism to map the request to the `route_config` and clusters. The request is processed by the filters but never routed upstream!
+
+---
+
 ## 🔑 Key Concepts inside a Listener
 
 1. **Network Address & Port**: 
