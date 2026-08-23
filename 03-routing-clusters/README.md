@@ -156,4 +156,139 @@ route_config:
           route:
             cluster: httpbin
             timeout: 0.5s
+
+---
+
+## 🌐 Global Rate Limiting across Multiple Kubernetes Pods
+
+When scaling an upstream service behind a Kubernetes `Service` (e.g. 5 replica pods), **Local Rate Limiting** is insufficient.
+* **The Local Limit Problem**: If you set a local limit of `100 rps` on each sidecar, and you have 5 pods, the overall cluster can handle up to `500 rps` in aggregate. However, if a single pod receives a sudden burst, it will rate-limit at `100 rps` even if the other 4 pods are completely idle. This is uneven and not truly "global".
+
+To enforce a strict limit across the entire Kubernetes Service collectively, Envoy uses a **Global Rate Limit Architecture**.
+
+---
+
+### 🗺️ The Architecture (Envoy + Rate Limit Service + Redis)
+
+Instead of keeping track of counters in memory locally, all Envoy sidecars delegate the decision-making to a centralized external **Rate Limit Service (RLS)** via a high-performance **gRPC API**, which stores the counters in a shared **Redis** database:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Client
+    participant SVC as K8s Service (ClusterIP)
+    box Kubernetes Pod A
+      participant EnvoyA as Envoy Sidecar A
+      participant AppA as Go App A (:8080)
+    end
+    box Kubernetes Pod B
+      participant EnvoyB as Envoy Sidecar B
+      participant AppB as Go App B (:8080)
+    end
+    participant RLS as Global Rate Limit Service (RLS)
+    participant Redis as Shared Redis Cache
+
+    Client->>SVC: Sends HTTP Request
+    SVC->>EnvoyA: Load Balancer routes to Pod A (port 9901)
+    
+    rect rgb(200, 220, 240)
+        Note over EnvoyA, Redis: Global Rate Limit Check
+        EnvoyA->>RLS: gRPC: ShouldRateLimit? (descriptor: "ip=198.51.100.42")
+        RLS->>Redis: INCR & EXPIRE counter
+        Redis-->>RLS: Current Count = 42 (Limit is 50)
+        RLS-->>EnvoyA: gRPC Response: OK (Within limit)
+    end
+
+    EnvoyA->>AppA: Forwards plaintext HTTP request
+    AppA-->>EnvoyA: Returns 200 OK
+    EnvoyA-->>Client: Returns 200 OK
+
+    Note over Client, EnvoyB: Next request lands on Pod B
+    Client->>SVC: Sends HTTP Request
+    SVC->>EnvoyB: Load Balancer routes to Pod B (port 9901)
+
+    rect rgb(240, 200, 200)
+        Note over EnvoyB, Redis: Global Rate Limit Check (Limit Exceeded)
+        EnvoyB->>RLS: gRPC: ShouldRateLimit? (descriptor: "ip=198.51.100.42")
+        RLS->>Redis: INCR counter
+        Redis-->>RLS: Current Count = 51 (Limit is 50)
+        RLS-->>EnvoyB: gRPC Response: OVER_LIMIT
+    end
+
+    EnvoyB-->>Client: Returns 429 Too Many Requests (Never reaches Go App B!)
+```
+
+---
+
+### ⚙️ How it is Configured in Envoy
+
+To link this up, your Envoy configurations require two components:
+
+#### 1. Define the Global Rate Limit Service as a Cluster
+Each Envoy sidecar needs to know where to find the centralized gRPC Rate Limit Service:
+
+```yaml
+static_resources:
+  clusters:
+    - name: global_rate_limiter
+      type: STRICT_DNS
+      connect_timeout: 0.25s
+      lb_policy: ROUND_ROBIN
+      http2_protocol_options: {} # Must use HTTP/2 for gRPC
+      load_assignment:
+        cluster_name: global_rate_limiter
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ratelimit-service.infra.svc.cluster.local
+                      port_value: 8081
+```
+
+#### 2. Configure the HTTP Filter & Route Descriptors
+You register the `envoy.filters.http.ratelimit` filter in your `http_filters` chain:
+
+```yaml
+# Inside http_connection_manager http_filters:
+http_filters:
+  - name: envoy.filters.http.ratelimit
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+      domain: my_api_limits
+      rate_limit_service:
+        grpc_service:
+          envoy_grpc:
+            cluster_name: global_rate_limiter
+        transport_api_version: V3
+
+  - name: envoy.filters.http.router
+    typed_config:
+      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+```
+
+#### 3. Define the Actions on the Virtual Host
+Inside your `route_config`, you define the **action descriptors** that Envoy will extract from the request and send to the RLS (e.g., rate limit based on the downstream client's remote address IP):
+
+```yaml
+route_config:
+  virtual_hosts:
+    - name: httpbin
+      domains: ["*"]
+      routes:
+        - match: { prefix: "/" }
+          route:
+            cluster: local_app
+            rate_limits:
+              - actions:
+                  - remote_address: {} # Extracts client IP as the key sent to RLS
+```
+
+---
+
+### 🎯 Key Architectural Benefits in Kubernetes:
+1. **Perfect Accuracy**: Enforces a strict limit across all pods collectively, regardless of how Kubernetes load-balances requests across endpoints.
+2. **Zero App Overhead**: Your Go Application container is never aware of the rate limiter; Envoy blocks invalid requests (`429 Too Many Requests`) at the proxy level, saving your app container's CPU/memory resources entirely.
+3. **Fail-Open Strategy**: You can configure Envoy's Rate Limit filter to **fail-open** (`failure_mode_deny: false`). If the centralized Redis or RLS deployment goes down, Envoy will allow requests to pass directly to your app rather than throwing errors to your users.
+
 ```
