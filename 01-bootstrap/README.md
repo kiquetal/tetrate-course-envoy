@@ -164,6 +164,40 @@ xff_num_trusted_hops: 1
    * Envoy will traverse the `X-Forwarded-For` list from the right side, skip `1` entry (the trusted ALB's IP), and identify the next address to the left as the **authenticated, un-spoofable client IP**.
    * Any IP addresses further to the left (which could have been sent by an external attacker to spoof their location) are treated as untrusted.
 
+### 🌐 The L7 `:authority` Pseudo-Header
+
+In modern web protocols (HTTP/2 and HTTP/3), the classic HTTP/1.1 `Host` header is replaced by the **`:authority` pseudo-header** to specify the target domain of a request.
+* **Envoy's Unified Engine**: Internally, Envoy is HTTP/2 first. It normalizes all incoming HTTP/1.1 `Host` headers into the `:authority` pseudo-header. When Envoy evaluates its `virtual_hosts` routing rules, it compares the `:authority` header against the `domains` list.
+
+#### 🏢 Production Load Balancer (ALB) Example:
+
+Consider an AWS Application Load Balancer (ALB) acting as the public ingress for your service mesh:
+
+```
+[ Client Browser ] 
+       │
+       │ HTTP/2 Connection
+       │ :authority: "api.proteus.local"
+       ▼
+[ AWS Application Load Balancer (ALB) ]
+       │
+       │ HTTP/1.1 Connection (Normalizes back to Host header)
+       │ Host: "api.proteus.local"
+       ▼
+[ Envoy Ingress (:9901) ]
+       │
+       │ Envoy translates Host ➔ :authority: "api.proteus.local"
+       │ Evaluates Virtual Host match rules:
+       │   domains: ["api.proteus.local"] or ["*"] ➔ MATCH ✅
+       ▼
+[ Go Application (:8080) ]
+```
+
+1. **Client** initiates a request using HTTP/2. The browser automatically formats the request target using the `:authority: api.proteus.local` pseudo-header.
+2. **AWS ALB** terminates the external client connection. In many enterprise settings, the connection *between* the ALB and your Fargate containers goes over HTTP/1.1. Therefore, the ALB translates `:authority` back into the classic L7 `Host: api.proteus.local` header.
+3. **Envoy (:9901)** receives the HTTP/1.1 request, parses the `Host` header, and internally normalizes it into `:authority: api.proteus.local` for its routing engine.
+4. **Virtual Host Match**: Envoy inspects the `:authority` header, matches it against your configured `virtual_hosts` domains list, and successfully forwards the request to your local application cluster.
+
 ---
 
 ## 🔌 Dynamic SDS Integration with SPIRE
