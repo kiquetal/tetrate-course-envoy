@@ -50,8 +50,8 @@ The team developing and operating the backend service in `namespace-b` knows its
 * **Placing the rule in their namespace** ensures they own the lifecycle of the service's capacity limits.
 
 ### 2. Egress Enforcement with Dynamic Visibility (`exportTo`)
-By default, placing a `DestinationRule` in `namespace-b` makes it mesh-visible. The configuration is picked up by Istio's Control Plane (istiod) and pushed to all sidecars.
-* **KrakenD's Envoy sidecar** in `namespace-a` downloads the configuration automatically.
+By default, placing a `DestinationRule` in `namespace-b` makes it globally mesh-visible. In modern Istio (1.10+), if the `exportTo` field is omitted, it **automatically defaults to `*` (all namespaces)**.
+* **KrakenD's Envoy sidecar** in `namespace-a` downloads the configuration automatically from the control plane (istiod).
 * When KrakenD initiates a call to `go-app.namespace-b.svc.cluster.local`, the **egress sidecar inside KrakenD's pod** intercepts the traffic and cuts the connection locally *before* wasting network packets traversing to the destination!
 
 ### 3. Preventing Configuration Duplication & Drift
@@ -72,8 +72,7 @@ metadata:
   namespace: namespace-b # ◄── Target namespace where your backend service resides
 spec:
   host: go-app.namespace-b.svc.cluster.local # FQDN of the target service
-  exportTo:
-    - "*" # ◄── CRITICAL: Exports visibility to ALL namespaces (including KrakenD's namespace-a)
+  # exportTo: ["*"] # ◄── OPTIONAL in modern Istio! Defaults to "*" (all namespaces) if omitted.
   trafficPolicy:
     connectionPool:
       tcp:
