@@ -53,6 +53,23 @@ graph TD
    * `envoy.filters.network.tcp_proxy` (basic L4 tunneling/forwarding).
    * `envoy.filters.network.thrift_proxy` (handles Apache Thrift protocol).
 
+## 🔄 Filter Chain Iteration & Control Flow
+
+When a connection or request flows through Envoy's filter chain, Envoy's Filter Manager executes each filter sequentially. But how does a filter indicate whether it is done and ready to **pass control to the next filter**?
+
+This is managed by returning **Filter Statuses** (or continuation actions) from the filter callbacks:
+
+### 1. Network (L4) Filters
+For L4 filters processing connections and raw read/write buffers, callbacks return a `Network::FilterStatus`:
+*   **`Continue`**: Passes the connection/data to the next filter in the chain immediately.
+*   **`StopIteration`**: Pauses filter chain execution. Subsequent filters will not be called until the current filter explicitly resumes execution (by calling callback functions to continue). This is useful if a filter is waiting on asynchronous data (e.g., checking an external auth service).
+
+### 2. HTTP (L7) Filters
+For HTTP filters handling headers, data, or trailers, callbacks return L7-specific statuses like `Http::FilterHeadersStatus` or `Http::FilterDataStatus`:
+*   **`Continue`**: Instructs the HTTP Connection Manager to pass the headers, body, or trailers to the next HTTP filter in the chain.
+*   **`StopIteration`**: Pauses HTTP filter chain iteration. The current filter holds the request/response until it asynchronously resumes it.
+*   **`StopAllIterationAndBuffer` / `StopAllIterationAndWatermark`**: Pauses iteration and buffers the incoming request data, waiting for the filter to complete its logic before moving on.
+
 ---
 
 ## 🕸️ The Istio Connection
