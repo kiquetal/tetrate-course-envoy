@@ -212,3 +212,74 @@ envoy --config-path /etc/envoy/envoy-dynamic.yaml \
 *   **`--service-cluster`**: Overrides the logical `node.cluster` identifier.
 *   **`--service-node`**: Overrides the instance-specific `node.id` identifier.
 
+---
+
+## 📂 6. Filesystem Discovery Service (xDS without a Control Plane)
+
+Writing and maintaining an external gRPC control plane (like `go-control-plane` or running Istiod) is highly complex. If you want **dynamic, zero-downtime reloads** but want to keep your operations simple, Envoy offers an incredible feature: **Filesystem-based xDS**.
+
+Instead of calling out to a gRPC network server, Envoy uses **Linux `inotify`** to watch local JSON/YAML files on disk. The moment you update these files, Envoy **automatically detects the change, validates the new configuration, and hot-reloads it in-memory with zero connection drops and zero restarts!**
+
+### 🛠️ Configuration Example: Filesystem-based xDS (`envoy-filesystem.yaml`)
+
+Here is how you configure Envoy to dynamically read its **Clusters** and **Listeners** from files on disk:
+
+```yaml
+# FILE: 04-xds-dynamic-config/envoy-filesystem.yaml
+node:
+  id: "local-task-01"
+  cluster: "web-gateway"
+
+dynamic_resources:
+  # ─── DYNAMIC LISTENERS FROM DISK ───
+  lds_config:
+    path_config_source:
+      path: "/etc/envoy/dynamic_listeners.yaml" # ◄── Envoy watches this file!
+
+  # ─── DYNAMIC CLUSTERS FROM DISK ───
+  cds_config:
+    path_config_source:
+      path: "/etc/envoy/dynamic_clusters.yaml" # ◄── Envoy watches this file!
+
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 15000
+```
+
+### 🧱 Example: The Dynamic Cluster File (`dynamic_clusters.yaml`)
+
+This is the format of the watched file. It contains the raw Cluster resources just like standard static configs, but inside a resource wrapper:
+
+```yaml
+# FILE: /etc/envoy/dynamic_clusters.yaml
+resources:
+  - "@type": type.googleapis.com/envoy.config.cluster.v3.Cluster
+    name: dynamic_backend_service
+    connect_timeout: 0.25s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: dynamic_backend_service
+      endpoints:
+        - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: my-app.internal
+                    port_value: 8080
+```
+
+### 🧠 How to Trigger a Hot-Reload (The Linux Symlink Trick)
+When using filesystem xDS, modifying a file directly in-place can sometimes cause Envoy to read a partially-written file (leading to schema parsing errors).
+
+To prevent this, production SREs use the **Atomic Symlink Swap Trick**:
+1. You write your new configuration to a temporary file: `/etc/envoy/dynamic_clusters.yaml.tmp`
+2. You atomically swap the symlink pointing to the configuration file:
+   ```bash
+   ln -sfn /etc/envoy/dynamic_clusters.yaml.tmp /etc/envoy/dynamic_clusters.yaml
+   ```
+3. Envoy instantly detects the symlink update, parses the new file atomically, drains the old connections, and spins up the new cluster—completely seamlessly! 🛡️⚡🚀
+
+

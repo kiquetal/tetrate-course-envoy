@@ -1,0 +1,23 @@
+node:
+  id: "local-task-01"
+  cluster: "web-gateway"
+
+# ========================================================
+# FILESYSTEM-BASED DYNAMIC DISCOVERY (NO CONTROL PLANE)
+# ========================================================
+dynamic_resources:
+  # ─── DYNAMIC LISTENERS FROM DISK ───
+  lds_config:
+    path_config_source:
+      path: "/etc/envoy/dynamic_listeners.yaml" # ◄── Envoy watches this file for updates!
+
+  # ─── DYNAMIC CLUSTERS FROM DISK ───
+  cds_config:
+    path_config_source:
+      path: "/etc/envoy/dynamic_clusters.yaml" # ◄── Envoy watches this file for updates!
+
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 15000
