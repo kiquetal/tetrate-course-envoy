@@ -169,34 +169,59 @@ xff_num_trusted_hops: 1
 In modern web protocols (HTTP/2 and HTTP/3), the classic HTTP/1.1 `Host` header is replaced by the **`:authority` pseudo-header** to specify the target domain of a request.
 * **Envoy's Unified Engine**: Internally, Envoy is HTTP/2 first. It normalizes all incoming HTTP/1.1 `Host` headers into the `:authority` pseudo-header. When Envoy evaluates its `virtual_hosts` routing rules, it compares the `:authority` header against the `domains` list.
 
-#### 🏢 Production Load Balancer (ALB) Example:
+#### 🏢 Complete End-to-End Hop Flow: IP Addresses & Headers Example
 
-Consider an AWS Application Load Balancer (ALB) acting as the public ingress for your service mesh:
+Let's trace a concrete request from an external client's browser, passing through an AWS ALB, into your Fargate Envoy sidecar, and finally to your Go App.
+
+##### 📌 The Network Landscape IPs:
+* **Client Browser IP**: `198.51.100.42`
+* **AWS ALB IP**: `10.0.1.50`
+* **Fargate Task IP (Envoy & Go App)**: `10.0.2.85`
 
 ```
-[ Client Browser ] 
-       │
-       │ HTTP/2 Connection
-       │ :authority: "api.proteus.local"
-       ▼
-[ AWS Application Load Balancer (ALB) ]
-       │
-       │ HTTP/1.1 Connection (Normalizes back to Host header)
-       │ Host: "api.proteus.local"
-       ▼
-[ Envoy Ingress (:9901) ]
-       │
-       │ Envoy translates Host ➔ :authority: "api.proteus.local"
-       │ Evaluates Virtual Host match rules:
-       │   domains: ["api.proteus.local"] or ["*"] ➔ MATCH ✅
-       ▼
-[ Go Application (:8080) ]
+┌───────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 1. CLIENT BROWSER (IP: 198.51.100.42)                                                         │
+│    - Action: Dials domain "api.proteus.local"                                                 │
+│    - Protocol: HTTP/2 (TLS)                                                                   │
+│    - Headers: :authority: api.proteus.local                                                   │
+└──────────────────────────────────────────────┬────────────────────────────────────────────────┘
+                                               │
+                                               ▼ [Internet Hop]
+┌───────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 2. AWS APPLICATION LOAD BALANCER (IP: 10.0.1.50)                                              │
+│    - Connection Source: 198.51.100.42                                                         │
+│    - Action: Terminates TLS, forwards to Fargate Task Target Group on port 9901               │
+│    - Protocol: HTTP/1.1 (Plaintext inside VPC)                                                │
+│    - Network Packet: Source IP: 10.0.1.50 ➔ Dest IP: 10.0.2.85                                │
+│    - Headers Forwarded:                                                                       │
+│         Host: api.proteus.local                                                                │
+│         X-Forwarded-For: 198.51.100.42                                                        │
+│         X-Forwarded-Proto: https                                                              │
+└──────────────────────────────────────────────┬────────────────────────────────────────────────┘
+                                               │
+                                               ▼ [VPC Target Group Hop]
+┌───────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 3. ENVOY INGRESS SIDE CAR (IP: 10.0.2.85, listening on Port 9901)                            │
+│    - Connection Source: 10.0.1.50 (ALB)                                                       │
+│    - Security Evaluated:                                                                      │
+│         - use_remote_address: true ➔ Appends downstream connection IP (10.0.1.50) to XFF      │
+│         - xff_num_trusted_hops: 1  ➔ Skips 1 hop (ALB) ➔ Extracts 198.51.100.42 as trusted client│
+│    - L7 Normalization: Translates incoming Host header back into internal :authority          │
+│    - Virtual Host Match: Matches :authority: api.proteus.local against domains ➔ MATCH ✅     │
+│    - Network Packet: Source IP: 127.0.0.1 ➔ Dest IP: 127.0.0.1:8080                           │
+│    - Headers Forwarded:                                                                       │
+│         Host: api.proteus.local                                                                │
+│         X-Forwarded-For: 198.51.100.42, 10.0.1.50                                             │
+└──────────────────────────────────────────────┬────────────────────────────────────────────────┘
+                                               │
+                                               ▼ [Localhost Loopback Hop]
+┌───────────────────────────────────────────────────────────────────────────────────────────────┐
+│ 4. GO APPLICATION (listening on localhost:8080)                                               │
+│    - Connection Source: 127.0.0.1 (Localhost Envoy)                                           │
+│    - r.RemoteAddr seen in code: "127.0.0.1"                                                    │
+│    - Trusted Client IP: Reads "198.51.100.42" from X-Forwarded-For header                     │
+└───────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
-
-1. **Client** initiates a request using HTTP/2. The browser automatically formats the request target using the `:authority: api.proteus.local` pseudo-header.
-2. **AWS ALB** terminates the external client connection. In many enterprise settings, the connection *between* the ALB and your Fargate containers goes over HTTP/1.1. Therefore, the ALB translates `:authority` back into the classic L7 `Host: api.proteus.local` header.
-3. **Envoy (:9901)** receives the HTTP/1.1 request, parses the `Host` header, and internally normalizes it into `:authority: api.proteus.local` for its routing engine.
-4. **Virtual Host Match**: Envoy inspects the `:authority` header, matches it against your configured `virtual_hosts` domains list, and successfully forwards the request to your local application cluster.
 
 ---
 
