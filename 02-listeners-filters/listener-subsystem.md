@@ -16,23 +16,42 @@ This guide covers the three most powerful listener filters studied in the course
 Listener filters run in sequence **before** network filter chains are matched:
 
 ```text
-Incoming TCP Socket
-       │
-       ▼
- [ LISTENER FILTERS ]
- ┌──────────────────────────────────────────────┐
- │ 1. Proxy Protocol Filter (Reads client IP)    │
- └──────────────────────┬───────────────────────┘
-                        ▼
- ┌──────────────────────────────────────────────┐
- │ 2. TLS Inspector (Sniffs SNI / ALPN)         │
- └──────────────────────┬───────────────────────┘
-                        ▼
- ┌──────────────────────────────────────────────┐
- │ 3. HTTP Inspector (Sniffs HTTP version)      │
- └──────────────────────┬───────────────────────┘
-                        ▼
- [ FILTER CHAIN MATCH ] ➔ Dynamically routes to the correct Network Filter!
+                        [ Incoming TCP Socket ]
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 🎧 1. LISTENER FILTERS SUB-STAGE (Runs sequentially on raw socket)   │
+│                                                                     │
+│  [ Proxy Protocol Filter ] ──► Extract & override Client Source IP  │
+│             │                                                       │
+│             ▼                                                       │
+│  [ TLS Inspector Filter  ] ──► Sniff TLS Handshake Client Hello      │
+│             │                  (Extracts SNI & ALPN protocols)      │
+│             ▼                                                       │
+│  [ HTTP Inspector Filter ] ──► Sniff first bytes of plaintext data  │
+│                                (Detects HTTP/1.1 vs HTTP/2 preface) │
+└──────────────────────────────────┬──────────────────────────────────┘
+                                   │
+                     (Attaches Metadata to Socket)
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 🔀 2. FILTER CHAIN MATCHING (Evaluates SNI, ALPN, IP, Port, etc.)   │
+└──────────────────────────────────┬──────────────────────────────────┘
+                                   │
+        ┌──────────────────────────┴──────────────────────────┐
+        │ (api.proteus.local)                                 │ (db.proteus.local)
+        ▼                                                     ▼
+┌──────────────────────────────────┐        ┌──────────────────────────────────┐
+│ 🌐 3A. NETWORK FILTER CHAIN A    │        │ 🖧 3B. NETWORK FILTER CHAIN B    │
+│  (HTTP Connection Manager)       │        │  (TCP Proxy Filter)              │
+│                                  │        │                                  │
+│  [ http_connection_manager ]     │        │  [ tcp_proxy ]                   │
+│             │                    │        │        │                         │
+│             ▼                    │        │        ▼                         │
+│  [ Sequential L7 HTTP Filters ]  │        │  [ Forward raw encrypted bytes ] │
+│  (Auth -> Rate Limit -> Router)  │        │  (Bypasses L7 filter entirely)   │
+└──────────────────────────────────┘        └──────────────────────────────────┘
 ```
 
 ---
