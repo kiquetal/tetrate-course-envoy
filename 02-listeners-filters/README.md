@@ -190,33 +190,22 @@ Envoy allows you to dynamically intercept, modify, or rewrite responses sent by 
 > * **Option 2 (Local Reply Config)**: Best for modifying errors generated **locally by Envoy itself** (e.g. rate limit blocks, connection timeouts, or RBAC 403s).
 > * **Option 3 (L7 HTTP Filters - Lua/Wasm)**: Best for complex, programmatic changes to response payloads or status codes returned by the **upstream backend server**.
 
-### 📌 Structural Hierarchy: Where do these options live in `envoy.yaml`?
+### 📌 Option 1: Clean Example — Response Header Manipulation Only
 
-To configure these modifications, you must understand exactly where they nest inside your configuration file (shown in a single schematic layout for visual reference of their relative locations):
+If you only want to use **Option 1** to dynamically append headers based on status codes, this is the exact, complete listener block. Notice there is **no** `local_reply_config` and **no** custom HTTP filters—just the standard router:
 
 ```yaml
 static_resources:
   listeners:
     - name: ingress_listener
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 80 }
       filter_chains:
         - filters:
             - name: envoy.filters.network.http_connection_manager
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-                
-                # =========================================================
-                # OPTION 2: Local Reply Config (Directly inside HCM)
-                # =========================================================
-                local_reply_config:
-                  mappers:
-                    - filter:
-                        status_code_filter:
-                          comparison: { op: EQ, value: 503 }
-                      headers_to_add:
-                        - header: { key: "x-custom-fallback", value: "active" }
-                      body_format_override:
-                        text_format: "Service under high load."
-
+                stat_prefix: ingress_http
                 route_config:
                   name: local_route
                   virtual_hosts:
@@ -226,17 +215,97 @@ static_resources:
                         - match: { prefix: "/" }
                           route:
                             cluster: local_app
-                            # =========================================================
-                            # OPTION 1: Response Headers (Nests under Route or Virtual Host)
-                            # =========================================================
+                            # ========================================================
+                            # OPTION 1: Dynamic response headers appended to client
+                            # ========================================================
                             response_headers_to_add:
-                              - header: { key: "x-upstream-status", value: "%RESPONSE_CODE%" }
-                              - header: { key: "x-response-flags", value: "%RESPONSE_FLAGS%" }
-
+                              - header:
+                                  key: "x-upstream-status"
+                                  value: "%RESPONSE_CODE%"
+                              - header:
+                                  key: "x-response-flags"
+                                  value: "%RESPONSE_FLAGS%"
                 http_filters:
-                  # =========================================================
-                  # OPTION 3: HTTP Filters (Nests inside HCM Http Filters list)
-                  # =========================================================
+                  # No custom filters here, only the terminal router
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+```
+
+---
+
+### 📌 Option 2: Clean Example — Local Reply Customization Only
+
+Use this option if you want to rewrite errors generated **locally inside Envoy** (e.g. Envoy-level 503s due to endpoint failures, or rate-limit blocks):
+
+```yaml
+static_resources:
+  listeners:
+    - name: ingress_listener
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 80 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                # ========================================================
+                # OPTION 2: Rewrite Envoy-generated status codes
+                # ========================================================
+                local_reply_config:
+                  mappers:
+                    - filter:
+                        status_code_filter:
+                          comparison: { op: EQ, value: 503 }
+                      headers_to_add:
+                        - header: { key: "x-custom-fallback", value: "active" }
+                      body_format_override:
+                        text_format: "Service under high load."
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend_service
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: local_app }
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+```
+
+---
+
+### 📌 Option 3: Clean Example — Lua Response Scripting Only
+
+Use this option if you want to run code to rewrite response payloads and status codes coming back **from your backend application**:
+
+```yaml
+static_resources:
+  listeners:
+    - name: ingress_listener
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 80 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend_service
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: local_app }
+                http_filters:
+                  # ========================================================
+                  # OPTION 3: Intercept backend response with scripting
+                  # ========================================================
                   - name: envoy.filters.http.lua
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
