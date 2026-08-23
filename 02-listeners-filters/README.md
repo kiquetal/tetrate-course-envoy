@@ -70,6 +70,89 @@ For HTTP filters handling headers, data, or trailers, callbacks return L7-specif
 *   **`StopIteration`**: Pauses HTTP filter chain iteration. The current filter holds the request/response until it asynchronously resumes it.
 *   **`StopAllIterationAndBuffer` / `StopAllIterationAndWatermark`**: Pauses iteration and buffers the incoming request data, waiting for the filter to complete its logic before moving on.
 
+### 🛠️ How to Implement This in a Custom Filter
+
+When you create a custom Envoy filter—either natively in **C++** or using **WebAssembly (Proxy-Wasm)**—you implement callback interfaces. Here is how your code controls this flow:
+
+#### Option A: Native C++ Http Filter
+In native Envoy development, you implement the `Http::StreamDecoderFilter` interface.
+
+```cpp
+// 1. In header processing, if you need an async external check (e.g. Auth):
+Http::FilterHeadersStatus MyAuthFilter::decodeHeaders(Http::RequestHeaderMap& headers, bool end_stream) {
+    if (isAuthorized(headers)) {
+        // Everything is fine, pass the request to the next filter immediately
+        return Http::FilterHeadersStatus::Continue;
+    }
+    
+    // Start an asynchronous auth request
+    initiateAsyncAuthLookup([this](bool success) {
+        if (success) {
+            // 2. When async callback completes, resume the chain!
+            decoder_callbacks_->continueDecoding();
+        } else {
+            // Or reject the request
+            decoder_callbacks_->sendLocalReply(Http::Code::Unauthorized, "Unauthorized", nullptr, absl::nullopt, "");
+        }
+    });
+
+    // Tell Envoy to PAUSE and wait
+    return Http::FilterHeadersStatus::StopIteration;
+}
+```
+
+#### Option B: WebAssembly / Proxy-Wasm (Go SDK)
+In modern Istio meshes, custom filters are usually written in Go, Rust, or C++ and compiled to Wasm. In the Go Proxy-Wasm SDK:
+
+```go
+type MyFilter struct {
+    types.DefaultHttpContext
+}
+
+// 1. When headers are received:
+func (f *MyFilter) OnHttpRequestHeaders(numHeaders int, endOfStream bool) types.Action {
+    if isValidRequest() {
+        // Pass control to the next filter in the Wasm chain
+        return types.ActionContinue
+    }
+    
+    // Trigger asynchronous network call
+    f.dispatchAsyncCall(func(responseBody []byte) {
+        if checkResponse(responseBody) {
+            // 2. Resume request processing when the response returns!
+            proxywasm.ResumeHttpRequest()
+        } else {
+            proxywasm.SendHttpResponse(403, nil, []byte("Forbidden"), -1)
+        }
+    })
+
+    // PAUSE the execution chain
+    return types.ActionPause
+}
+```
+
+#### 🔄 Async Pause & Resume Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Envoy as Envoy Filter Manager
+    participant Filter as Custom Filter (Your Code)
+    participant Auth as External Service (e.g., Auth/DB)
+
+    Envoy->>Filter: Call OnHttpRequestHeaders()
+    Note over Filter: Starts Async network request
+    Filter-->>Envoy: Return StopIteration / ActionPause
+    Note over Envoy: Request is PAUSED.<br/>No subsequent filters are called.
+    
+    Filter->>Auth: Dispatches HTTP/gRPC request
+    Auth-->>Filter: Returns Async Response (200 OK)
+    
+    Filter->>Envoy: Calls continueDecoding() / ResumeHttpRequest()
+    Note over Envoy: Request is RESUMED
+    Envoy->>Envoy: Invokes Next Filter in Chain
+```
+
 ---
 
 ## 🕸️ The Istio Connection
