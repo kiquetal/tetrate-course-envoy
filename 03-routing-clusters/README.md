@@ -430,6 +430,47 @@ Depending on your traffic profile, you might select or configure different algor
 | **Sliding Window Log** | Tracks a timestamped log of *every* request. Discards logs older than the rolling window and counts remaining logs. | • **Extreme Accuracy**: Totally eliminates the boundary bursting problem. | • **High Memory Cost**: Must store timestamps for every single request, making it highly memory-expensive under high load. |
 | **Sliding Window Counter** | Approximates a sliding window by calculating a weighted sum of the current and previous fixed window counters. | • **High Performance**: Extremely accurate with very low memory footprint (does not store individual logs). | • **Approximation**: Has a tiny approximation error (~4-5%) if traffic spikes sharply at window boundary lines. |
 
+---
 
+## 🗺️ Quick-Reference Key Map: Envoy vs. Rate Limit Service (RLS)
 
+To quickly bridge Envoy's config with your Rate Limit Service rules, use this direct schema mapping cheat sheet:
+
+### 1. In `envoy.yaml` (The Client/Traffic Proxy)
+* **Purpose**: Inspect traffic, extract headers, and generate descriptor labels.
+* **Exact Path Key**: Under `routes.route.rate_limits`
+* **Key to search for**: **`rate_limits`** -> **`actions`**
+
+```yaml
+# FILE: envoy.yaml
+routes:
+  - match: { path: "/api" }
+    route:
+      cluster: my_service
+      # ────────── SEARCH FOR THIS KEY ──────────
+      rate_limits:
+        - actions:
+            - request_headers:
+                header_name: ":method"
+                descriptor_key: "http_method"  # ◄── Label sent to RLS
 ```
+
+---
+
+### 2. In `ratelimit.yaml` (The External Rate Limit Daemon config)
+* **Purpose**: Evaluate values, match nested decision trees, and apply limits.
+* **Exact Path Key**: Under `domain`
+* **Key to search for**: **`descriptors`**
+
+```yaml
+# FILE: ratelimit.yaml (RLS Rule Config)
+domain: my_api_limits
+# ────────── SEARCH FOR THIS KEY ──────────
+descriptors:
+  - key: http_method                          # ◄── Matches descriptor_key from Envoy
+    value: POST                               # ◄── Matches the extracted value
+    rate_limit:
+      unit: MINUTE
+      requests_per_unit: 10
+```
+
