@@ -578,16 +578,16 @@ descriptors:
 
 ---
 
-## 🧱 Component Roles & Network Flow Breakdown
+## 🧱 Component Roles & Physical Architecture
 
 To fully understand how global rate limiting resolves distributed state in Kubernetes, it helps to understand the exact division of duties and physical network path.
 
 ### 📦 Physical Duties & Config Reference
 
-| Component / Container | What it is | Configuration File | What is inside the file? |
+| Component / Container | What it is | Configuration File / Config Source | What is inside the config? |
 | :--- | :--- | :--- | :--- |
 | **Envoy Proxy** <br>*(Sidecar or Gateway)* | The actual network proxy that intercepts and load-balances client connections. | **`envoy.yaml`** | • Tells Envoy what gRPC cluster endpoint the RLS daemon runs on.<br>• Instructs Envoy to extract header values and send them dynamically to RLS. |
-| **Rate Limit Service (RLS)** <br>*(Lyft Rate Limit Container)* | A standalone, lightweight gRPC server daemon running in your cluster. | **`ratelimit.yaml`** | • Defines the **nested decision rules, units, and thresholds** (e.g. limit `/api` to `10/min`).<br>• Tells the container how to authenticate and talk to **Redis**. |
+| **Rate Limit Service (RLS)** <br>*(Lyft Rate Limit Container)* | A standalone, lightweight gRPC server daemon running in your cluster. | **`ratelimit.yaml`** (ConfigMap) + **Env envs** (Deployment manifest) | • **`ratelimit.yaml`**: Defines nested business rules & limits (e.g. `POST /api = 10/min`).<br>• **Env Variables**: Configures the connection to the external Redis cluster (URLs, auth, types). |
 | **Redis** <br>*(Cache Database)* | High-performance in-memory key-value database. | *Standard DB instances* | • Stores the raw numerical counters (e.g. `IP:198.51.100.42 = 8 requests`). |
 
 ---
@@ -614,17 +614,17 @@ To fully understand how global rate limiting resolves distributed state in Kuber
 |            │                       +───────────────+    |
 +────────────┼────────────────────────────────────────────+
              │
-             ▼
+             ▼ (gRPC over HTTP/2)
 +─────────────────────────────────────────────────────────+
 | Standalone RLS Pod                                      |
 |                                                         |
 |    +───────────────────────────────────────────────+    |
-|    |           Rate Limit Container                |    |
-|    |          (Reads ratelimit.yaml)               |    |
+|    |           Rate Limit Container                |◄─── [ ratelimit.yaml ] (Rules)
+|    |          (Reads ratelimit.yaml)               |◄─── [ Env Variables ]  (Redis Conn)
 |    +───────┬───────────────────────────────────────+    |
 +────────────┼────────────────────────────────────────────+
              │
-             ▼ (Redis TCP Protocol)
+             ▼ (Redis TCP Protocol / REDIS_URL)
 +─────────────────────────────────────────────────────────+
 | Redis Cluster / Pod                                     |
 |                                                         |
@@ -637,10 +637,39 @@ To fully understand how global rate limiting resolves distributed state in Kuber
 
 ---
 
+### 🧠 Caching vs. Rate Limiting: Where does the State live?
+
+When designing resilient service meshes, developers often contrast how HTTP Caching and Rate Limiting manage state:
+
+#### 1. HTTP Caching: In-Memory & Self-Contained (No gRPC/Redis required!)
+The built-in `envoy.extensions.http.cache.simple` provider runs inside Envoy's own memory footprint:
+*   **Where data lives**: In-memory (Envoy's local RAM).
+*   **Why it's local**: Caching is usually resource-independent. Serving a cached response locally saves latency and avoids any network hops.
+
+#### 2. Global Rate Limiting: Distributed & Centralized (gRPC & Redis Required)
+Rate limits enforce shared constraints across many pods collectively:
+*   **Where data lives**: In a centralized **Redis** database, queried by the **RLS** container.
+*   **The RLS Container Dual-Configuration**: 
+    To connect the RLS container to the external Redis database, you must supply connection credentials at container deployment time:
+    ```yaml
+    # RLS Container Deployment manifest configuration
+    env:
+      - name: REDIS_TYPE
+        value: "standalone" # standalone, sentinel, or cluster
+      - name: REDIS_URL
+        value: "redis://redis-master.infra.svc.cluster.local:6379"
+      - name: REDIS_AUTH
+        value: "my-secure-redis-password"
+    ```
+*   **Why it can't be local**: If Pod A and Pod B only tracked limits in their own local RAM, a client could bypass limits by spreading traffic across instances. Shared state in Redis is mandatory.
+
+---
+
 ### 🌐 Official Reference Resources
 
 *   **Envoy's Global Rate Limit HTTP Filter**: Official specification of the Envoy filter schema. ➔ [Envoy Docs: rate_limit](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/rate_limit_filter)
 *   **Lyft's Reference RLS Container**: The absolute reference implementation of the gRPC RLS server. ➔ [GitHub: envoyproxy/ratelimit (Lyft)](https://github.com/envoyproxy/ratelimit)
 *   **Istio Rate Limiting Guide**: How Istio coordinates these components dynamically. ➔ [Istio Docs: Rate Limiting](https://istio.io/latest/docs/tasks/policy-enforcement/rate-limiting/)
+
 
 
