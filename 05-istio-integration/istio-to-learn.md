@@ -86,3 +86,84 @@ spec:
       baseEjectionTime: 30s
       maxEjectionPercent: 100 # Allow ejecting all unhealthy hosts
 ```
+
+---
+
+## 🌐 Global Rate Limiting in Istio via `EnvoyFilter`
+
+Since Istio's standard high-level resources (`VirtualService`, `Gateway`) do **not** have fields for global rate limiting, Istio exposes a highly powerful escape hatch: the **`EnvoyFilter`** Custom Resource. 
+
+An `EnvoyFilter` allows you to patch the underlying Envoy configurations inside the sidecar side-by-side with Istio's generated configs.
+
+To configure Global Rate Limiting in Istio, you deploy an `EnvoyFilter` that does **two patches**:
+1. **The L7 Filter Patch**: Injects the `envoy.filters.http.ratelimit` filter into the sequential filter chain.
+2. **The Route Action Patch**: Defines the dynamic header extraction (descriptors) on a specific route match.
+
+### 🛠️ The Global Rate Limit `EnvoyFilter` Manifest
+
+Here is the exact production-grade manifest you deploy to `namespace-b` to enforce global rate limits on your Go Backend:
+
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: go-backend-rate-limit
+  namespace: namespace-b # Same namespace as the target service
+spec:
+  workloadSelector:
+    labels:
+      app: go-app # ◄── Tells Istio to only patch Envoy sidecars inside your Go App pods
+  configPatches:
+    # ────────────────────────────────────────────────────────────────
+    # PATCH 1: Inject the L7 Rate Limit Filter into http_filters
+    # ────────────────────────────────────────────────────────────────
+    - applyTo: HTTP_FILTER
+      match:
+        context: SIDECAR_INBOUND # Patch inbound sidecar traffic
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: "envoy.filters.http.router" # Match the terminal router filter
+      patch:
+        operation: INSERT_BEFORE # Insert BEFORE the router terminates the pipeline!
+        value:
+          name: envoy.filters.http.ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+            domain: go_app_limits
+            rate_limit_service:
+              grpc_service:
+                envoy_grpc:
+                  # Tells Envoy to dial the RLS service running in your cluster
+                  cluster_name: outbound|8081||ratelimit-service.infra.svc.cluster.local
+              transport_api_version: V3
+
+    # ────────────────────────────────────────────────────────────────
+    # PATCH 2: Inject the Rate Limit Actions/Descriptors into virtual_hosts
+    # ────────────────────────────────────────────────────────────────
+    - applyTo: HTTP_ROUTE
+      match:
+        context: SIDECAR_INBOUND
+        routeConfiguration:
+          vhost:
+            name: "inbound|http|8080" # Match the inbound Go App port virtual host
+            route:
+              action: ANY
+      patch:
+        operation: MERGE
+        value:
+          route:
+            rate_limits:
+              - actions:
+                  - request_headers:
+                      header_name: ":method"
+                      descriptor_key: "http_method"
+```
+
+### 🧠 How it Works in Istio:
+1. **Dynamically Patched**: When Istiod detects this `EnvoyFilter`, it automatically regenerates the configuration for the `go-app` Envoy sidecars.
+2. **Insert Before Router**: In **PATCH 1**, we tell Envoy to insert the Rate Limit filter `INSERT_BEFORE` the `router` subFilter. This preserves the absolute law of Envoy: **the router must always terminate the chain!**
+3. **gRPC Cluster String**: In **PATCH 1**, the `cluster_name` uses Istio's standard outbound cluster naming convention (`outbound|<port>||<FQDN>`), routing the gRPC check cleanly through the mesh backbones!
+
