@@ -48,8 +48,12 @@ graph LR
     Endpoints -->|Upstream Request| Upstream[(Upstream Service)]
 ```
 
-*   **Downstream**: An entity that connects to Envoy, sends requests, and receives responses (e.g., a client application or an external load balancer).
-*   **Upstream**: A backend service to which Envoy connects, forwards requests, and receives responses.
+*   **Downstream (Relative POV: Where traffic comes *FROM*)**:
+    > [!NOTE]
+    > **The POV is always Envoy**. Downstream represents any client that **initiates a connection to Envoy**, sends requests, and receives responses (e.g. browser clients, AWS Application Load Balancers, or mesh peers).
+*   **Upstream (Relative POV: Where traffic is sent *TO*)**:
+    > [!NOTE]
+    > **The POV is always Envoy**. Upstream represents the backend destination to which **Envoy initiates a connection** to forward the request and fetch responses (e.g. your local Go app container on `127.0.0.1:8080`, external databases, or third-party APIs).
 *   **Listener**: A named network location (e.g., IP address and port) that client requests are sent to.
 *   **Filters**: Pluggable modules that process requests/responses. They reside in filter chains and handle protocol parsing, rate limiting, logging, RBAC, etc.
 *   **Routes**: Decides which **Cluster** receives a request, based on criteria like headers, URI paths, or hostnames.
