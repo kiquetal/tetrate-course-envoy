@@ -33,6 +33,55 @@ graph TD
 
 ---
 
+## 🗺️ Master Configuration Hierarchy: Visualizing `route_config` vs `http_filters`
+
+When writing Envoy configuration files by hand, the nested structure can feel extremely complex. The key to mastering this schema without fear is understanding the **sibling relationship** inside the **`HttpConnectionManager` (HCM)**.
+
+### 🌳 The Master Config Hierarchy Tree
+
+Here is the exact nesting structure of a listener. Note how the **`route_config`** (routing directory) and **`http_filters`** (L7 processing chain) sit side-by-side as siblings under the HCM's `typed_config`:
+
+```text
+Listener (Ex: Port 80)
+└── filter_chains
+    └── filters (L4 Network Filters)
+        └── envoy.filters.network.http_connection_manager (HCM)
+            └── typed_config
+                │
+                ├── route_config  ◄─── [ SIBLING 1: The Routing Directory / Map ]
+                │   └── virtual_hosts
+                │       └── domains (Matches ":authority" / "Host" header)
+                │       └── routes (Matches path prefix "/api")
+                │           └── route
+                │               ├── cluster (Target backend upstream)
+                │               ├── retry_policy
+                │               └── response_headers_to_add
+                │
+                └── http_filters  ◄─── [ SIBLING 2: The L7 Processing Pipeline ]
+                    ├── envoy.filters.http.cors
+                    ├── envoy.filters.http.jwt_authn
+                    ├── envoy.filters.http.lua
+                    └── envoy.filters.http.router  ◄── (The terminal filter)
+```
+
+### 🧠 Why are they siblings? (Separation of Concerns)
+
+Envoy separates the **Routing Directory** from the **Processing Pipeline** for cleaner configuration:
+*   **`http_filters` (The Pipeline)**: Decides *how* requests and responses are inspected or transformed (e.g. CORS logic, JWT validation, inline Lua script execution).
+*   **`route_config` (The Map)**: Decides *where* the requests are directed (host matching, prefix paths, retries, weighted splits).
+
+### 🔗 The Router Bridge
+
+How does a request moving through `http_filters` find its target in `route_config`?
+The connection is established by the very last filter in the HTTP chain: **`envoy.filters.http.router`**. 
+
+The **Router Filter** acts as the dynamic bridge. Once the request successfully passes all preceding filters (CORS, JWT, etc.), the Router looks sideways at the sibling `route_config` map, matches the host/path, and routes the request upstream!
+
+> [!WARNING]
+> Because it terminates the filter pipeline to forward the request, the **Router Filter** must **ALWAYS** be the very last element in the `http_filters` list. Placing filters after the router will cause Envoy to throw errors and fail to start.
+
+---
+
 ## 🔑 Key Concepts inside a Listener
 
 1. **Network Address & Port**: 
