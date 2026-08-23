@@ -180,14 +180,19 @@ graph TD
 * **Why this order?**
   * You place it **after** JWT validation because you don't want to make an expensive network call to your external auth service if the JWT is invalid or expired.
   * You place it **before** the **Router filter** because the Router is always the terminal filter that completes the chain by forwarding the request upstream.
-
 ## 🔄 L7 Upstream Response & Local Reply Transformation
 
 Envoy allows you to dynamically intercept, modify, or rewrite responses sent by upstream servers (or generated locally by Envoy itself) based on HTTP status codes.
 
+> [!IMPORTANT]
+> The three approaches below are **independent, alternative options**. You do **NOT** configure them all at once for the same task. You choose **only one** depending on your use case:
+> * **Option 1 (Response Headers)**: Best for simple, static response header injections.
+> * **Option 2 (Local Reply Config)**: Best for modifying errors generated **locally by Envoy itself** (e.g. rate limit blocks, connection timeouts, or RBAC 403s).
+> * **Option 3 (L7 HTTP Filters - Lua/Wasm)**: Best for complex, programmatic changes to response payloads or status codes returned by the **upstream backend server**.
+
 ### 📌 Structural Hierarchy: Where do these options live in `envoy.yaml`?
 
-To configure these modifications, you must understand exactly where they nest inside your configuration file:
+To configure these modifications, you must understand exactly where they nest inside your configuration file (shown in a single schematic layout for visual reference of their relative locations):
 
 ```yaml
 static_resources:
