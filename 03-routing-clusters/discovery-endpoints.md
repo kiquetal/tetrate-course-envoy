@@ -112,6 +112,48 @@ clusters:
 
 ---
 
+## 🔍 Active vs. Passive Health Checking (Outlier Detection)
+
+In Envoy, health checking falls into two distinct categories: **Active** and **Passive**.
+
+| Feature | Active Health Checking (`health_checks`) | Passive Health Checking (`outlier_detection`) |
+| :--- | :--- | :--- |
+| **Mechanics** | Envoy **proactively** sends artificial probe requests (e.g. `GET /healthz`) periodically. | Envoy **passively** monitors real application traffic flowing to the endpoints. |
+| **Network Overhead**| Higher (probe packets are sent continuously even if there is no client traffic). | **Zero** (no synthetic packets are created; it uses real client request statistics). |
+| **Vulnerability** | Probes might succeed while actual real user requests are failing (due to subtle database/routing issues). | 100% accurate to the real user experience. |
+| **Action** | Removes host from the pool completely until health probes pass again. | **Ejects** the host from the load balancing pool temporarily for a cooling-off period. |
+
+### 🛠️ Raw Envoy Configuration for Passive Health Checking (Outlier Detection)
+
+In Envoy, Passive Health Checking is configured using the **`outlier_detection`** block inside the cluster. It maps perfectly to modern **v3 API** standards:
+
+```yaml
+clusters:
+  - name: secure_payment_cluster
+    connect_timeout: 0.25s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: secure_payment_cluster
+      endpoints:
+        - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: payment-api.infra.svc.cluster.local
+                    port_value: 443
+
+    # ─── PASSIVE HEALTH CHECKING (OUTLIER DETECTION) ───
+    outlier_detection:
+      consecutive_5xx: 3          # Eject host after 3 consecutive 5xx server errors
+      interval: 10s               # How often Envoy analyzes statistics
+      base_ejection_time: 30s     # How long the host is ejected (cooling-off period)
+      max_ejection_percent: 100   # Max percentage of hosts that can be ejected (allows ejecting all)
+      consecutive_gateway_failure: 5 # Eject on connection/gateway timeout errors
+```
+
+---
+
 ## ☸️ The Istio Map: Connecting Envoy to Istio Abstractions
 
 When you move to **Istio**, you do not write raw Cluster configs. Instead, Istio translates high-level Kubernetes and Istio resources into these exact Envoy concepts under the hood:
