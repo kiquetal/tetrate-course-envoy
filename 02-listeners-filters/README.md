@@ -153,6 +153,34 @@ sequenceDiagram
     Envoy->>Envoy: Invokes Next Filter in Chain
 ```
 
+#### 🔌 Custom Wasm Filters vs. Built-in Ext-Authz
+
+You do not **always** need to write a custom Wasm or C++ filter to implement custom authentication! Envoy has a rich landscape of built-in filters. 
+
+##### 1. The Built-in `ext_authz` Filter
+Instead of writing a low-level filter in Wasm or C++, you can use Envoy’s built-in **External Authorization Filter** (`envoy.filters.http.ext_authz`).
+* **How it works**: The built-in `ext_authz` filter is already compiled into Envoy. You configure it via YAML/JSON to point to an external service (which you write in Go, Node.js, Python, etc.) over gRPC or HTTP. 
+* **The Flow**: When a request hits `ext_authz`, it pauses the iteration, asks your external service if the request is allowed, and then either resumes or returns a `401/403` based on your service's reply.
+
+##### 2. Where does `ext_authz` fit in the Filter Tree?
+The `ext_authz` filter is an **HTTP L7 filter** located inside the `HTTP Connection Manager` filter list. In a production filter chain, order is critical:
+
+```mermaid
+graph TD
+    subgraph HTTP Connection Manager Filter Chain
+        direction TB
+        F1["1. CORS Filter<br>(Handles pre-flight checks early)"]
+        F1 --> F2["2. JWT Decryption / Validation<br>(Parses token headers)"]
+        F2 --> F3["3. External Auth: envoy.filters.http.ext_authz<br>(Your custom external check)"]
+        F3 --> F4["4. RBAC / Authorization Policy<br>(Verifies target permissions)"]
+        F4 --> F5["5. Router Filter<br>(ALWAYS LAST - forwards request upstream)"]
+    end
+```
+
+* **Why this order?**
+  * You place it **after** JWT validation because you don't want to make an expensive network call to your external auth service if the JWT is invalid or expired.
+  * You place it **before** the **Router filter** because the Router is always the terminal filter that completes the chain by forwarding the request upstream.
+
 ---
 
 ## 🕸️ The Istio Connection
