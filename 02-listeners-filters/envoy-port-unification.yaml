@@ -1,0 +1,88 @@
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 15000
+
+static_resources:
+  listeners:
+    - name: unified_ingress_listener
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8443 # The single physical ingress port!
+
+      # ─── 🎧 1. LISTENER FILTERS (Sniff metadata before decryption) ───
+      listener_filters:
+        - name: envoy.filters.listener.tls_inspector
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
+
+      # ─── 🔀 2. FILTER CHAINS MATCHING (Selects the right L4 filter) ───
+      filter_chains:
+        
+        # ────────── CHAIN A: HTTP/WEB TRAFFIC (Using http_connection_manager) ──────────
+        - filter_chain_match:
+            server_names: ["api.proteus.local"] # Matched by sniffing the SNI domain
+            transport_protocol: "tls"
+          filters:
+            - name: envoy.filters.network.http_connection_manager # ◄── Layer 7 HTTP Filter!
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: api_ingress
+                route_config:
+                  name: api_routes
+                  virtual_hosts:
+                    - name: api_service
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route:
+                            cluster: local_http_api_cluster # Send to Go App
+                http_filters:
+                  - name: envoy.extensions.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.http.router.v3.Router
+
+        # ────────── CHAIN B: DATABASE TRAFFIC (Using tcp_proxy) ──────────
+        - filter_chain_match:
+            server_names: ["db.proteus.local"] # Matched by sniffing the SNI domain
+            transport_protocol: "tls"
+          filters:
+            - name: envoy.filters.network.tcp_proxy # ◄── Layer 4 raw TCP byte-tunnel!
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.network.tcp_proxy.v3.TcpProxy
+                stat_prefix: db_passthrough
+                cluster: secure_database_cluster # Send straight to database container
+
+  # ─── 🏢 3. UPSTREAM BACKEND CLUSTERS ───
+  clusters:
+    # Upstream Go Web App Cluster
+    - name: local_http_api_cluster
+      connect_timeout: 0.25s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: local_http_api_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 8080
+
+    # Upstream Database Cluster (Postgres / MySQL)
+    - name: secure_database_cluster
+      connect_timeout: 0.25s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: secure_database_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: db-host.infra.internal
+                      port_value: 5432
