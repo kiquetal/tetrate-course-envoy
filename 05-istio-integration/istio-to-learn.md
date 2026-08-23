@@ -167,3 +167,32 @@ spec:
 2. **Insert Before Router**: In **PATCH 1**, we tell Envoy to insert the Rate Limit filter `INSERT_BEFORE` the `router` subFilter. This preserves the absolute law of Envoy: **the router must always terminate the chain!**
 3. **gRPC Cluster String**: In **PATCH 1**, the `cluster_name` uses Istio's standard outbound cluster naming convention (`outbound|<port>||<FQDN>`), routing the gRPC check cleanly through the mesh backbones!
 
+---
+
+## 🚀 The Reality of `EnvoyFilter` in Modern Istio (1.16+)
+
+While `EnvoyFilter` is extremely powerful, the Istio community actively promotes replacing it where possible due to maintenance risks (e.g. upgrades breaking naming conventions or Envoy schemas). 
+
+### 🛡️ Real-World Case Study: The "Wallet Saver" (In-Mesh Protection)
+
+Why do we still rely on `EnvoyFilter` for in-mesh (east-west) rate limiting? 
+
+Consider a **Third-Party SMS Gateway Service** (or payment API) running inside your mesh. Multiple internal services (`Checkout`, `Auth`, `Notifications`) call it:
+
+```text
+  [ Checkout Service ] ──────┐
+  [ Auth Service     ] ──────┼──► [ Inbound Envoy Sidecar ] ──► [ SMS Service ] ──► (External API)
+  [ Notification     ] ──────┘    (Rate Limit Interceptor)
+```
+
+*   **The Cost Risk**: SMS providers charge real money per text. If `Checkout-Service` gets stuck in an infinite retry loop, it can trigger millions of API calls and run up massive bills in minutes.
+*   **The In-Mesh Shield**: By deploying the `EnvoyFilter` rate-limiting check directly on the **inbound sidecar of the SMS Service** itself, we establish a centralized shield inside the mesh. If any internal microservice goes rogue, the SMS Service's sidecar blocks the overflow locally, returning a `429 Too Many Requests` and protecting your wallet!
+
+### 🔄 Modern Alternatives to `EnvoyFilter`
+
+For other custom Layer 7 logic, modern Istio encourages these alternatives:
+
+1.  **`WasmPlugin`**: If you want to run custom authorization, header injection, or L7 in-memory HTTP Caching, compile your logic into a **WebAssembly (WASM)** binary and inject it safely using Istio's first-class `WasmPlugin` CRD instead of using raw configuration patches.
+2.  **Kubernetes Gateway API**: For rate-limiting traffic at the **Ingress Gateway (North-South)**, migrate to the standardized Gateway API using first-class vendor extensions (like `RateLimitPolicy`) which completely bypass raw `EnvoyFilter` configurations!
+
+
