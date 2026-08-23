@@ -203,5 +203,70 @@ spec:
 
 ---
 
+## ⚖️ 3. Load Balancing Algorithms (`lb_policy`)
+
+Once Envoy has a pool of healthy endpoints, it must decide *which* specific instance receives the incoming request. Envoy supports several highly optimized **Load Balancing Policies** defined via `lb_policy` in the cluster:
+
+*   **`ROUND_ROBIN` (Default)**: Alternates requests across all healthy endpoints sequentially. Best for stateless, evenly loaded workloads.
+*   **`LEAST_REQUEST`**: Tracks active concurrent requests and routes the next query to the host with the **fewest outstanding connections**. Excellent for varying database queries or tasks with unpredictable processing times.
+*   **`RANDOM`**: Randomly picks an endpoint.
+*   **`RING_HASH`**: Consistent hashing based on request parameters (like headers or cookies). It maps keys to a virtual ring of endpoints, ensuring the same client or key always hits the same backend instance.
+*   **`MAGLEV`**: Google's high-performance consistent hashing algorithm. Faster than `RING_HASH` lookup and generates more uniform key distributions, making it the industry standard for Redis/Memcached proxying.
+
+---
+
+## ⚡ 4. Circuit Breakers (Connection & Request Pool Limits)
+
+Unlike Outlier Detection (which ejects failed hosts *after* errors happen), **Circuit Breaking in Envoy acts as a proactive gatekeeper**. It sets strict limits on connection pools to prevent a sudden spike in traffic from causing a cascade failure across your upstream cluster.
+
+If these limits are crossed, Envoy immediately drops subsequent requests with a `503` locally (bypassing the network entirely to protect the overloaded backend).
+
+### ⚙️ Raw Envoy v3 Configuration Example:
+```yaml
+clusters:
+  - name: protected_db_cluster
+    connect_timeout: 0.25s
+    type: STRICT_DNS
+    lb_policy: LEAST_REQUEST
+    
+    # ─── THE GATEKEEPER: CIRCUIT BREAKERS ───
+    circuit_breakers:
+      thresholds:
+        - priority: DEFAULT
+          max_connections: 1024       # Max L4 TCP connections Envoy will open to the backend
+          max_requests: 512           # Max concurrent L7 requests outstanding (HTTP/2 / HTTP/3)
+          max_pending_requests: 100   # Max requests queued in memory waiting for a connection slot
+          max_retries: 3              # Max concurrent retries allowed mesh-wide (prevents "retry storms")
+```
+
+---
+
+## ☸️ The Istio Map: Connecting to DestinationRule
+
+Both **Load Balancing** and **Circuit Breaking** are mapped directly into the Istio **`DestinationRule`** under `trafficPolicy`:
+
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: protected-service-policy
+spec:
+  host: my-app.default.svc.cluster.local
+  trafficPolicy:
+    # ─── LOAD BALANCING MAP ───
+    loadBalancer:
+      simple: LEAST_REQUEST # ◄── Maps to Envoy's lb_policy: LEAST_REQUEST
+      
+    # ─── CIRCUIT BREAKERS MAP ───
+    connectionPool:
+      tcp:
+        maxConnections: 1024 # ◄── Maps to max_connections
+      http:
+        http1MaxPendingRequests: 100 # ◄── Maps to max_pending_requests
+        maxRequestsPerConnection: 10 # (Limits load per socket)
+```
+
+---
+
 > [!NOTE]
-> By marrying **Service Discovery** (finding where hosts are) with **Active Health Checking** (confirming they are alive), Envoy ensures that your traffic is only sent to healthy, active targets, eliminating connection drops dynamically without manual operator intervention!
+> By combining **Service Discovery** (finding endpoints), **Health Checks / Outlier Detection** (verifying readiness), **Load Balancing** (equalizing traffic), and **Circuit Breaking** (pool limits), Envoy provides a complete, resilient self-healing network boundary that protects both client request stability and server safety!
