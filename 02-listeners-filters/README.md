@@ -180,6 +180,28 @@ static_resources:
 
 ---
 
+### 🧠 Caching vs. Rate Limiting: Where does the State live?
+
+When configuring Envoy, developers often ask: *“Why does the Rate Limit filter need an external gRPC cluster definition, but the HTTP Cache filter does not?”*
+
+This comes down to how Envoy manages state:
+
+#### 1. The HTTP Cache: In-Memory & Self-Contained (No gRPC needed!)
+The built-in `envoy.extensions.http.cache.simple` provider is compiled directly into the Envoy binary:
+*   **Where data lives**: In a tiny segment of **Envoy's local RAM**.
+*   **How it queries**: Envoy checks its own local memory footprint.
+*   **Zero Network Overhead**: Because it is purely in-memory, it requires no external gRPC service or backend cluster definitions!
+
+#### 2. The Rate Limiter: Distributed & Centralized (gRPC Required)
+Unlike caching, rate-limiting is often a **global** constraint across many scaled instances:
+*   **Where data lives**: In a central **Redis** instance.
+*   **How it queries**: Envoy sidecars must send a high-performance **gRPC check** to a central **Rate Limit Service (RLS)** container, which increments and checks the keys in Redis.
+*   **Why it can't be local**: If Pod A and Pod B only tracked limits in their own local RAM, a client could double their allowed requests by simply alternating calls between the two pods. Shared state is mandatory!
+
+---
+
+---
+
 ### ⚠️ What happens if you omit the `router` filter?
 
 If you do not include the **`envoy.filters.http.router`** filter at the end of the `http_filters` list:
