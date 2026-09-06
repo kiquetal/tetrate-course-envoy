@@ -27,4 +27,20 @@ openssl genrsa -out service-b.key 2048
 openssl req -new -key service-b.key -out service-b.csr -subj "/CN=service-b.example.com"
 openssl x509 -req -in service-b.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out service-b.crt -days 365 -sha256
 ```
-Place these `.crt` and `.key` files in a directory accessible to Envoy.
+Place these `.crt` and `.key` files in a directory accessible to Envoy (e.g., `/certs/`).
+
+## 🧪 Verification
+
+You can verify that Envoy is correctly routing based on SNI using the `openssl s_client` tool.
+
+### Verify Service A
+```bash
+openssl s_client -connect localhost:10443 -servername service-a.example.com -CAfile ca.crt
+```
+
+### Verify Service B
+```bash
+openssl s_client -connect localhost:10443 -servername service-b.example.com -CAfile ca.crt
+```
+
+If configured correctly, `service-a`'s connection should present the `service-a.crt`, and `service-b`'s connection should present the `service-b.crt`.
