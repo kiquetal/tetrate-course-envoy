@@ -1,0 +1,60 @@
+static_resources:
+  listeners:
+    - name: tls_listener
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 10443 }
+      
+      # 1. MUST HAVE: Peeks at SNI
+      listener_filters:
+        - name: envoy.filters.listener.tls_inspector
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
+
+      filter_chains:
+        # Chain for Service A
+        - filter_chain_match:
+            server_names: ["service-a.example.com"]
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                  - certificate_chain: { filename: "/certs/service-a.crt" }
+                    private_key: { filename: "/certs/service-a.key" }
+          filters:
+            - name: envoy.filters.network.tcp_proxy
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+                stat_prefix: service_a
+                cluster: cluster_a
+
+        # Chain for Service B
+        - filter_chain_match:
+            server_names: ["service-b.example.com"]
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                  - certificate_chain: { filename: "/certs/service-b.crt" }
+                    private_key: { filename: "/certs/service-b.key" }
+          filters:
+            - name: envoy.filters.network.tcp_proxy
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+                stat_prefix: service_b
+                cluster: cluster_b
+
+  clusters:
+    - name: cluster_a
+      type: STATIC
+      load_assignment:
+        cluster_name: cluster_a
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 8001 } } } }] }]
+    - name: cluster_b
+      type: STATIC
+      load_assignment:
+        cluster_name: cluster_b
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 8002 } } } }] }]
