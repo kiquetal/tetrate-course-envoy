@@ -690,22 +690,12 @@ static_resources:
           port_value: 10000
 ```
 
-### 2. Handling Original Destination (L4 TCP Proxying)
-If you are doing L4 TCP proxying, you **must** configure the `tcp_proxy` filter to restore the original destination, otherwise, Envoy will forward the traffic back to itself, causing a loop.
+### 3. The "Golden Rule" for ORIGINAL_DST Cluster
 
-```yaml
-      filter_chains:
-        - filters:
-            - name: envoy.filters.network.tcp_proxy
-              typed_config:
-                "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
-                stat_prefix: ingress_tcp
-                cluster: my_backend_cluster
-                # --- CRITICAL FOR L4 TRANSPARENT PROXYING ---
-                # Tells Envoy to look at the original destination IP/Port
-                # before it was hijacked by iptables.
-                tunneling_config:
-                  use_original_dst: true 
-```
+If you use the `ORIGINAL_DST` cluster type, there is one hard requirement: **The traffic must have been intercepted by a mechanism that preserves the original destination in the `SO_ORIGINAL_DST` socket option.**
+
+- **How it works:** When `iptables` redirects a packet, the Linux kernel overwrites the destination to `127.0.0.1:10000`, losing the original destination IP/Port. However, the kernel saves the original address in a special socket option: `SO_ORIGINAL_DST`.
+- **The Requirement:** Envoy *must* be able to query this specific kernel socket option. If your network interception tool does not set this, the `ORIGINAL_DST` cluster will fail because Envoy has no way to determine the intended backend address.
+- **Why this matters:** This is why transparent proxying in Kubernetes/Istio is not just about the `iptables` rule; it's about the entire network stack ensuring that `SO_ORIGINAL_DST` is correctly populated and readable by the Envoy process.
 
 > **Note**: For L7 (HTTP) proxying, the `HttpConnectionManager` typically handles the recovery of the original destination automatically via Linux socket options (`SO_ORIGINAL_DST`).
