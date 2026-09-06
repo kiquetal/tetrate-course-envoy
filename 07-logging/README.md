@@ -53,4 +53,11 @@ These flags describe internal Envoy state when processing requests:
 | **NR** | **No Route Configured**: No route found for the request authority/path. |
 | **URX** | **Upstream Retry Limit Exceeded**: The request exceeded the maximum number of retries. |
 | **NC** | **No Connection**: Envoy could not establish a connection to the upstream. |
-| **DT** | **Decoder Timeout**: The request stream timed out (e.g., while waiting for headers). |
+| **DH** | **Dropped (Healtcheck)**: Request was dropped because the upstream host was being healthchecked. |
+| **LH** | **Local Healthcheck Failed**: Envoy failed the healthcheck for this upstream. |
+| **UT** | **Upstream Request Timeout**: The upstream request timed out. |
+| **LR** | **Local Reset**: The connection was reset locally by Envoy (e.g., due to policy). |
+| **UR** | **Upstream Remote Reset**: The connection was reset by the upstream server. |
+| **DI** | **Delayed Injected**: The request was delayed by a fault injection policy. |
+| **FI** | **Fault Injected**: The request was aborted by a fault injection policy. |
+| **RL** | **Rate Limited**: The request was rejected by the rate-limit filter. |
