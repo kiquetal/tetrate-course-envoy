@@ -660,3 +660,42 @@ sudo iptables -t nat -A OUTPUT -p tcp -m owner ! --uuid-owner root --dport 80 -j
 | **Originating Locally** | `OUTPUT` | Force local apps through Envoy. |
 
 By combining both, you effectively "capture" all traffic on port 80, regardless of whether it's coming from outside the server or from a process running inside it. This provides a complete transparent proxying experience.
+
+---
+
+## ⚙️ Envoy Configuration for Traffic Hijacking
+
+When using `iptables` to redirect traffic, Envoy needs to know how to handle these intercepted packets, specifically regarding the "original destination" (since the kernel rewrites it to `127.0.0.1:10000`).
+
+### 1. The Listener Address
+The Envoy listener must be bound to the exact port specified in the `iptables` `--to-port` rule.
+
+```yaml
+static_resources:
+  listeners:
+    - name: transparent_listener
+      address:
+        socket_address:
+          address: 0.0.0.0  # Must match the port in your iptables --to-port
+          port_value: 10000
+```
+
+### 2. Handling Original Destination (L4 TCP Proxying)
+If you are doing L4 TCP proxying, you **must** configure the `tcp_proxy` filter to restore the original destination, otherwise, Envoy will forward the traffic back to itself, causing a loop.
+
+```yaml
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.tcp_proxy
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+                stat_prefix: ingress_tcp
+                cluster: my_backend_cluster
+                # --- CRITICAL FOR L4 TRANSPARENT PROXYING ---
+                # Tells Envoy to look at the original destination IP/Port
+                # before it was hijacked by iptables.
+                tunneling_config:
+                  use_original_dst: true 
+```
+
+> **Note**: For L7 (HTTP) proxying, the `HttpConnectionManager` typically handles the recovery of the original destination automatically via Linux socket options (`SO_ORIGINAL_DST`).
