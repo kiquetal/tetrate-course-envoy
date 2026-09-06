@@ -612,3 +612,7 @@ In an Istio Service Mesh, `istiod` dynamically configures hundreds of listeners 
   All egress traffic from your application container is intercepted and redirected to port `15001`. Envoy processes this and routes it to the appropriate external or internal cluster.
 * **Virtual Listeners**: 
   Istio configures virtual listeners corresponding to the Kubernetes `Service` IPs and ports in your cluster so Envoy knows how to intercept and handle requests meant for those services.
+
+5. Listener Filters:
+   Run before network filters to inspect connection metadata.
+   * `envoy.filters.listener.tls_inspector`: Peeks into TLS `ClientHello` to extract SNI and ALPN, enabling dynamic certificate/chain selection.
