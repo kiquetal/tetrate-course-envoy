@@ -26,6 +26,31 @@ access_log:
         text_format: "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT% %DURATION%ms %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\"\n"
 ```
 
-## Key Concepts
-- **Log Formatters**: Envoy supports highly customizable log formats using command operators (e.g., `%RESPONSE_CODE%`, `%START_TIME%`).
-- **Access Log Service (ALS)**: For production at scale, instead of writing to files, Envoy can send access logs over gRPC to a centralized collector (like Fluentd, Datadog, or OpenTelemetry Collector).
+## Access Log Formatters
+
+Envoy logs are highly customizable using command operators.
+
+### Common Log Operators
+- `%START_TIME%`: Timestamp of request start.
+- `%REQ(:METHOD)%`: HTTP method (GET, POST, etc.).
+- `%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%`: Request path.
+- `%RESPONSE_CODE%`: HTTP response code (e.g., 200, 404, 503).
+- `%RESPONSE_FLAGS%`: Detailed flags explaining why the request failed or was delayed (see below).
+- `%BYTES_RECEIVED%`: Bytes received by Envoy.
+- `%BYTES_SENT%`: Bytes sent by Envoy.
+- `%DURATION%`: Total time in ms for the request to complete.
+- `%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)%`: Time spent by the upstream service.
+- `%UPSTREAM_HOST%`: The IP/port of the upstream backend host.
+
+### Common Response Flags (%RESPONSE_FLAGS%)
+These flags describe internal Envoy state when processing requests:
+
+| Flag | Meaning |
+| :--- | :--- |
+| **UH** | **No Healthy Upstream**: No healthy hosts were found in the cluster. |
+| **UF** | **Upstream Failure**: The upstream connection failed (e.g., reset, timeout). |
+| **UO** | **Upstream Overflow**: The upstream circuit breaker tripped (too many requests). |
+| **NR** | **No Route Configured**: No route found for the request authority/path. |
+| **URX** | **Upstream Retry Limit Exceeded**: The request exceeded the maximum number of retries. |
+| **NC** | **No Connection**: Envoy could not establish a connection to the upstream. |
+| **DT** | **Decoder Timeout**: The request stream timed out (e.g., while waiting for headers). |
