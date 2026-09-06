@@ -602,6 +602,34 @@ http_filters:
 
 ---
 
+## Traffic Hijacking (Transparent Proxying)
+
+In lab environments, we often want to test Envoy as a transparent proxy. This allows us to intercept traffic destined for a service without changing client or application configurations.
+
+### 1. Enable IP Forwarding
+```bash
+net.ipv4.ip_forward = 1
+```
+* **Why**: This kernel parameter allows the Linux host to forward packets. While strictly speaking `REDIRECT` happens in the local network stack, enabling forwarding is a prerequisite for more complex topologies (like Kubernetes sidecar traffic hijacking where packets traverse network namespaces).
+
+### 2. Traffic Redirection (iptables)
+```bash
+iptables -t nat -A PREROUTING -i enp0s1 -p tcp --dport 80 -j REDIRECT --to-port 10000
+```
+* **Purpose**: Performs transparent redirection (traffic hijacking).
+* **`-t nat`**: Operates on the NAT table to alter packet destinations.
+* **`-A PREROUTING`**: Captures packets in the first stage of the Linux packet processing pipeline, *before* routing decisions are made.
+* **`-i enp0s1`**: Targets traffic entering the specific network interface.
+* **`-p tcp --dport 80`**: Matches inbound TCP traffic on Port 80.
+* **`-j REDIRECT --to-port 10000`**: Rewrites the destination port of the packet from 80 to 10000, where Envoy is listening.
+
+> [!WARNING]
+> Manual `iptables` rules are powerful but risky. Misconfiguration can create network loops or lock you out of your server (e.g., if you accidentally redirect SSH port 22 traffic). Always test in a controlled VM/sandbox.
+
+5. Listener Filters:
+   Run before network filters to inspect connection metadata.
+   * `envoy.filters.listener.tls_inspector`: Peeks into TLS `ClientHello` to extract SNI and ALPN, enabling dynamic certificate/chain selection.
+
 ## 🕸️ The Istio Connection
 
 In an Istio Service Mesh, `istiod` dynamically configures hundreds of listeners on your Envoy sidecars (`istio-proxy`).
@@ -612,7 +640,3 @@ In an Istio Service Mesh, `istiod` dynamically configures hundreds of listeners 
   All egress traffic from your application container is intercepted and redirected to port `15001`. Envoy processes this and routes it to the appropriate external or internal cluster.
 * **Virtual Listeners**: 
   Istio configures virtual listeners corresponding to the Kubernetes `Service` IPs and ports in your cluster so Envoy knows how to intercept and handle requests meant for those services.
-
-5. Listener Filters:
-   Run before network filters to inspect connection metadata.
-   * `envoy.filters.listener.tls_inspector`: Peeks into TLS `ClientHello` to extract SNI and ALPN, enabling dynamic certificate/chain selection.
