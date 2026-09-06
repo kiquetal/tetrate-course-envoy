@@ -620,7 +620,7 @@ In lab environments, we often want to test Envoy as a transparent proxy. This al
 ```bash
 net.ipv4.ip_forward = 1
 ```
-* **Why**: This kernel parameter allows the Linux host to forward packets. While strictly speaking `REDIRECT` happens in the local network stack, enabling forwarding is a prerequisite for more complex topologies (like Kubernetes sidecar traffic hijacking where packets traverse network namespaces).
+* **Why**: By default, Linux acts as a "Host" and drops packets not destined for its own IP. This parameter makes Linux act as a "Router," allowing it to accept packets destined for *other* IPs (like Kubernetes Service IPs). Without this, the kernel drops the packet before `iptables` can hijack it. While local `REDIRECT` *might* work without it, it is mandatory in almost all production-like topologies where traffic targets non-local Virtual IPs.
 
 ### 2. Traffic Redirection (iptables)
 ```bash
