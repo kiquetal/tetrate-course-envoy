@@ -11,19 +11,20 @@ These logs capture the internal state of the Envoy process.
 ## 2. Access Logs (Traffic Logs)
 These logs are generated *per request/connection* and are configured within the filter chains.
 
-### Configuration in `HttpConnectionManager`
-Access logs are typically configured within the `HttpConnectionManager` (HCM).
+### Example: Configuring Access Logs in Envoy
+
+The `access_log` configuration is placed inside the `HttpConnectionManager` (HCM). This allows Envoy to access parsed HTTP metadata (like headers, path, method) for logging.
 
 ```yaml
-# Inside the http_connection_manager configuration:
+# Inside your http_connection_manager configuration:
 access_log:
   - name: envoy.access_loggers.file
     typed_config:
       "@type": type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog
-      path: /dev/stdout
-      # Using standard Envoy log format
+      path: "/dev/stdout" # Log to standard output
       log_format:
-        text_format: "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT% %DURATION%ms %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\"\n"
+        # Example format combining common operators and flags:
+        text_format: "[%START_TIME%] \"%REQ(:METHOD)% %REQ(:PATH)%\" %RESPONSE_CODE% %RESPONSE_FLAGS% %DURATION%ms\n"
 ```
 
 ## Access Log Formatters
