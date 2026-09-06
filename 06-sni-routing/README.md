@@ -44,3 +44,28 @@ openssl s_client -connect localhost:10443 -servername service-b.example.com -CAf
 ```
 
 If configured correctly, `service-a`'s connection should present the `service-a.crt`, and `service-b`'s connection should present the `service-b.crt`.
+
+## ⚙️ Advanced Matching: ALPN and Transport Protocols
+
+You can further refine your routing logic by matching on `transport_protocol` (e.g., "tls") and `application_protocols` (ALPN, e.g., "h2", "http/1.1").
+
+```yaml
+filter_chains:
+  # Match TLS + HTTP/2 (ALPN: h2)
+  - filter_chain_match:
+      transport_protocol: "tls"
+      application_protocols: ["h2"]
+    filters:
+      - name: envoy.filters.network.http_connection_manager
+        # ... HTTP/2 specific configuration ...
+
+  # Match TLS + HTTP/1.1 (ALPN: http/1.1)
+  - filter_chain_match:
+      transport_protocol: "tls"
+      application_protocols: ["http/1.1"]
+    filters:
+      - name: envoy.filters.network.http_connection_manager
+        # ... HTTP/1.1 specific configuration ...
+```
+
+> **Note**: Just like SNI, you must have `envoy.filters.listener.tls_inspector` enabled to detect ALPN values. Order in `filter_chains` is crucial; Envoy matches the first chain that satisfies all criteria.
