@@ -1,0 +1,21 @@
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.31-latest
+    ports:
+      - "10443:10443"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml
+      - ./certs:/certs
+    command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "-l", "debug"]
+
+  backend-a:
+    image: hashicorp/http-echo
+    command: ["-text", "Hello from Service A", "-listen", ":5678"]
+    expose:
+      - "5678"
+
+  backend-b:
+    image: hashicorp/http-echo
+    command: ["-text", "Hello from Service B", "-listen", ":5678"]
+    expose:
+      - "5678"

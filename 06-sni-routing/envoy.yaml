@@ -49,12 +49,12 @@ static_resources:
 
   clusters:
     - name: cluster_a
-      type: STATIC
+      type: STRICT_DNS
       load_assignment:
         cluster_name: cluster_a
-        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 8001 } } } }] }]
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: backend-a, port_value: 5678 } } } }] }]
     - name: cluster_b
-      type: STATIC
+      type: STRICT_DNS
       load_assignment:
         cluster_name: cluster_b
-        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: 127.0.0.1, port_value: 8002 } } } }] }]
+        endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: backend-b, port_value: 5678 } } } }] }]
