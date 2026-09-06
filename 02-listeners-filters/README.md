@@ -13,23 +13,14 @@ At its core, a Listener is responsible for:
 Here is how a Listener sits at the edge of the Envoy proxy, acting as the gateway that processes downstream traffic:
 
 ```mermaid
-graph TD
-    Downstream["Downstream Client"] -->|TCP Connection| Listener["Envoy Listener (e.g., 0.0.0.0:10000)"]
-    
-    subgraph Listener Inner Working
-        Listener --> FilterChainMatch{"Filter Chain Matcher<br>(ALPN, SNI, IP, etc.)"}
-        FilterChainMatch -->|Match 1| FC1["Filter Chain A"]
-        FilterChainMatch -->|Match 2| FC2["Filter Chain B"]
-        
-        subgraph Filter Chain A
-            FC1 --> LF1["Network Filter 1 (e.g., TLS Inspector)"]
-            LF1 --> LF2["Network Filter 2 (e.g., HTTP Connection Manager)"]
-        end
-    end
-    
-    LF2 --> Router["Router Filter"]
-    Router --> Cluster["Upstream Cluster"]
+graph LR
+    A[Raw TCP Packet] -->|1. Listener Filters| B{Decision}
+    B -->|Peeks at SNI/IP| C[Select Filter Chain]
+    C --> D[2. Network Filters]
+    D --> E[Process HTTP/TCP]
 ```
+
+---
 
 ---
 
