@@ -8,17 +8,36 @@ At its core, a Listener is responsible for:
 
 ---
 
-## 🧩 Visualizing the Listener Architecture
+## 🧩 Listener Architecture: The Order of Operations
 
-Here is how a Listener sits at the edge of the Envoy proxy, acting as the gateway that processes downstream traffic:
+The order in which Envoy processes traffic is critical to its performance and functionality.
 
 ```mermaid
-graph LR
-    A[Raw TCP Packet] -->|1. Listener Filters| B{Decision}
-    B -->|Peeks at SNI/IP| C[Select Filter Chain]
-    C --> D[2. Network Filters]
-    D --> E[Process HTTP/TCP]
+graph TD
+    subgraph OSI_L4 [Layer 4 / Transport]
+        A[TCP Connection]
+        B[1. Listener Filters: e.g., TLS Inspector]
+    end
+
+    subgraph Envoy_Bridge [Network Filter Layer]
+        C[2. Network Filters: e.g., HTTP Connection Manager]
+    end
+
+    subgraph OSI_L7 [Layer 7 / Application]
+        D[3. HTTP Filters: e.g., JWT, CORS, Lua]
+        E[Router Filter]
+    end
+
+    A --> B
+    B --> C
+    C -->|Promotes bytes to HTTP| D
+    D --> E
 ```
+
+### Key Differences
+- **Listener Filters (L4/L5):** Operate on raw bytes during the connection handshake (e.g., peeking for SNI).
+- **Network Filters (L4/L5):** Operate on the raw byte stream *after* the connection is established. This layer is the bridge; the `HttpConnectionManager` is a network filter that parses raw bytes into L7 objects.
+- **HTTP Filters (L7):** Operate on fully parsed HTTP headers, bodies, and trailers (Application layer logic).
 
 ---
 
