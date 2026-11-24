@@ -87,4 +87,19 @@ The biggest point of confusion in Envoy is perspective. **The POV is ALWAYS Envo
 * **Upstream (Where traffic is sent *TO*)**:
   > The backend destination that **Envoy dials out to** to forward requests and fetch responses (e.g., your local Go/Node container on `localhost:8080`, external databases, or third-party APIs).
 
+---
+
+## 🎛️ 5. The xDS Dynamic Parts Reference Guide
+
+Here is the quick reference guide for all the dynamic components of Envoy (xDS), what they control, and where to find their examples in this repository:
+
+| Discovery Service | Acronym | What it controls | Example in this Repo |
+| :--- | :--- | :--- | :--- |
+| **Listener Discovery Service** | **LDS** | Inbound ports, IP bindings, and network/HTTP filter stacks. | `04-xds-dynamic-config/dynamic_listeners.json` |
+| **Route Discovery Service** | **RDS** | L7 routing tables (virtual host matching, path prefix rules). | Embedded in HCM route configs |
+| **Cluster Discovery Service** | **CDS** | Upstream backend services (timeouts, load balancing policies). | `04-xds-dynamic-config/dynamic_clusters.json` |
+| **Endpoint Discovery Service** | **EDS** | Live Pod/Task IP addresses and ports inside a Cluster. | Streamed dynamically via control plane / SDS |
+| **Secret Discovery Service** | **SDS** | Dynamic TLS certificates, private keys, and SPIFFE trust bundles. | `01-bootstrap/` (SPIRE UDS integration) |
+
+
 
