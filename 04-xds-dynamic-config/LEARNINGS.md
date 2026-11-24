@@ -101,5 +101,43 @@ Here is the quick reference guide for all the dynamic components of Envoy (xDS),
 | **Endpoint Discovery Service** | **EDS** | Live Pod/Task IP addresses and ports inside a Cluster. | Streamed dynamically via control plane / SDS |
 | **Secret Discovery Service** | **SDS** | Dynamic TLS certificates, private keys, and SPIFFE trust bundles. | `01-bootstrap/` (SPIRE UDS integration) |
 
+---
+
+## 🔌 6. Filesystem xDS vs gRPC xDS (what actually works in Docker)
+
+This was the biggest practical lesson of the chapter. Same Envoy, same version, two completely different update mechanisms:
+
+| | `path_config_source` (filesystem) | `ads_config` + gRPC (control plane) |
+| :--- | :--- | :--- |
+| Trigger | Linux `inotify` (file write / inode change) | Message on an already-open gRPC stream |
+| Crosses a Docker bind-mount | ❌ often not (host kernel event ≠ container kernel event) | ✅ no filesystem involved |
+| Who drives the update | Envoy polls/watches (pull) | Control plane pushes |
+| Restart needed | Sometimes (depends on mount / editor save strategy) | **Never** |
+| Real-world equivalent | quick single-machine experiments | Istio / Consul / Gloo / Traffic Director |
+
+Rule of thumb learned the hard way: **inside Docker, use gRPC xDS; use the filesystem only when Envoy runs natively.**
+
+The working demo lives in `grpc-control-plane/` (Go + `envoyproxy/go-control-plane`) and `docker-compose.grpc.yaml`. Full walkthrough with the push sequence, port map and exercises: [`GRPC-XDS.md`](./GRPC-XDS.md).
+
+```bash
+cd 04-xds-dynamic-config
+docker compose -f docker-compose.grpc.yaml up -d --build
+
+curl -s localhost:9902/            # Hello from Backend V1 (served over gRPC xDS)
+curl -s localhost:19000/switch     # push a NEW CDS snapshot over ADS gRPC
+curl -s localhost:9902/            # Hello from Backend V2 (served over gRPC xDS)
+
+docker inspect -f '{{.State.StartedAt}} restarts={{.RestartCount}}' xds-grpc-lab-envoy-1
+```
+
+Look for this in `docker logs xds-grpc-lab-envoy-1` — no startup logs before it, just the delta:
+
+```text
+[info][upstream] cds: add 1 cluster(s), remove 1 cluster(s)
+[info][upstream] cds: added/updated 1 cluster(s), skipped 0 unmodified cluster(s)
+```
+
+That log line pair **is** the proof that the whole "dynamic" story in Envoy is real: config changed, connections kept, process untouched.
+
 
 
