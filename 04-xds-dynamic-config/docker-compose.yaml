@@ -1,8 +1,25 @@
 services:
+  backend:
+    image: hashicorp/http-echo:latest
+    command: ["-text=Hello from Chapter 4 Working Envoy!", "-listen=:8080"]
+    expose:
+      - "8080"
+    networks:
+      - xds-net
+
   envoy:
     image: envoyproxy/envoy:v1.30.0
     ports:
+      - "9901:9901"
       - "15000:15000"
     volumes:
-      - ./envoy.yaml:/etc/envoy/envoy.yaml
-    command: ["envoy", "-c", "/etc/envoy/envoy.yaml"]
+      - ./envoy.json:/etc/envoy/envoy.json
+    command: ["envoy", "-c", "/etc/envoy/envoy.json"]
+    depends_on:
+      - backend
+    networks:
+      - xds-net
+
+networks:
+  xds-net:
+    driver: bridge
