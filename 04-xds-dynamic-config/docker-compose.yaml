@@ -1,7 +1,15 @@
 services:
-  backend:
+  backend-v1:
     image: hashicorp/http-echo:latest
-    command: ["-text=Hello from Chapter 4 Working Envoy!", "-listen=:8080"]
+    command: ["-text=Hello from Backend V1 🟢", "-listen=:8080"]
+    expose:
+      - "8080"
+    networks:
+      - xds-net
+
+  backend-v2:
+    image: hashicorp/http-echo:latest
+    command: ["-text=Hello from Backend V2 🔵", "-listen=:8080"]
     expose:
       - "8080"
     networks:
@@ -13,10 +21,11 @@ services:
       - "9901:9901"
       - "15000:15000"
     volumes:
-      - ./envoy.json:/etc/envoy/envoy.json
+      - .:/etc/envoy # ◄── Mount the whole directory so inode/inotify watches persist!
     command: ["envoy", "-c", "/etc/envoy/envoy.json"]
     depends_on:
-      - backend
+      - backend-v1
+      - backend-v2
     networks:
       - xds-net
 

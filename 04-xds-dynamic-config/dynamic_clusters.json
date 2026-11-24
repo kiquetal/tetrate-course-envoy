@@ -1,14 +1,14 @@
 {
-  "version_info": "1",
+  "version_info": "2",
   "resources": [
     {
       "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
-      "name": "dynamic_backend_service",
+      "name": "backend_service",
       "connect_timeout": "0.25s",
       "type": "STRICT_DNS",
       "lb_policy": "ROUND_ROBIN",
       "load_assignment": {
-        "cluster_name": "dynamic_backend_service",
+        "cluster_name": "backend_service",
         "endpoints": [
           {
             "lb_endpoints": [
@@ -16,7 +16,7 @@
                 "endpoint": {
                   "address": {
                     "socket_address": {
-                      "address": "backend",
+                      "address": "backend-v2",
                       "port_value": 8080
                     }
                   }
