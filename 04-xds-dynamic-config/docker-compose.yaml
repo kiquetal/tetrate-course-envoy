@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  # 1. The Backend Application Container
+  backend:
+    image: hashicorp/http-echo:latest
+    command: ["-text=Hello from the Dynamic Backend App v1!"]
+    ports:
+      - "8080:8080"
+    networks:
+      - xds-net
+
+  # 2. The Envoy Proxy Container using Filesystem xDS
+  envoy:
+    image: envoyproxy/envoy:v1.30.0
+    ports:
+      - "9901:9901"   # Ingress port for incoming client traffic
+      - "15000:15000" # Envoy Admin Interface
+    volumes:
+      - ./envoy-filesystem.yaml:/etc/envoy/envoy.yaml
+      - ./dynamic_listeners.yaml:/etc/envoy/dynamic_listeners.yaml
+      - ./dynamic_clusters.yaml:/etc/envoy/dynamic_clusters.yaml
+    depends_on:
+      - backend
+    networks:
+      - xds-net
+
+networks:
+  xds-net:
+    driver: bridge

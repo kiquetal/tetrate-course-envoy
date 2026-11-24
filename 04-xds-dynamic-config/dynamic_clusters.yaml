@@ -11,5 +11,5 @@ resources:
             - endpoint:
                 address:
                   socket_address:
-                    address: 127.0.0.1
-                    port_value: 8080 # Points locally to your Go app container
+                    address: backend # Docker Compose service name
+                    port_value: 8080

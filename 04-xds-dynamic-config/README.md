@@ -1,5 +1,8 @@
 # 🚀 Chapter 04: xDS Dynamic Configuration & Delta gRPC in ECS Fargate
 
+> [!NOTE]
+> **🧪 Hands-on Lab Available!** Ready to test this live? Check out the [LAB.md](./LAB.md) guide for a fully containerized Docker Compose lab featuring real-time filesystem xDS hot-reloads.
+
 One of Envoy’s absolute superpower features is **Dynamic Configuration**. 
 
 Up until now, we have been using **Static Configurations** (`static_resources`) inside our `envoy.yaml` for listeners, routes, clusters, and endpoints. While static configs are simple to write, they require a full container restart to apply changes. In a fast-scaling cloud environment (like ECS Fargate or Kubernetes), restarting Envoy proxies whenever a backend pod/task scales up or down is a complete operational dealbreaker.
