@@ -338,6 +338,53 @@ those is a one-field addition and each one is a knob the POC is supposed to exer
 | Did it reject anything? | running Envoy | `curl :15001/stats \| grep control_plane` |
 | What is being served now? | running control plane | `curl :19000/status` |
 
+### ⑦ Who owns each name: `xds_control_plane` vs `backend_service`
+
+These two strings look alike (both are `cluster_name` values) but they play opposite roles.
+
+```
+  "xds_control_plane"  =  THE PIPE   (bootstrap, local to Envoy)
+  "backend_service"    =  THE TARGET (delivered BY the pipe, via CDS)
+```
+
+```bash
+grep -rn "xds_control_plane" --include=*.go .     # → nothing
+grep -rn "xds_control_plane" --include=*.json .
+# envoy-grpc.json:25   ads_config...envoy_grpc.cluster_name
+# envoy-grpc.json:59   static_resources.clusters[0].name
+# envoy-grpc.json:63   that cluster's load_assignment.cluster_name
+
+grep -rn "backend_service" --include=*.go .
+# grpc-control-plane/main.go:38   clusterName = "backend_service"
+grep -rn "backend_service" --include=*.json .
+# envoy-grpc.json:49   tcp_proxy.cluster          ← the listener pointing at it
+```
+
+| Name | Where it is defined | Who else uses it | What it means |
+| :--- | :--- | :--- | :--- |
+| `xds_control_plane` | **only** `envoy-grpc.json` (3 places) | nobody — Envoy resolves it to itself | *"the upstream through which I fetch my config"* — address `control-plane:18000` |
+| `backend_service` | Envoy listener **and** Go `clusterName` | both processes | *"the upstream my traffic must go to"* — the payload CDS delivers |
+| `envoy-grpc-lab` (`node.id`) | `envoy-grpc.json` | sent to the server; ignored by `constantHash` | identifies the Envoy in control-plane logs |
+| `global` | `grpc-control-plane/main.go` | snapshot cache key | which snapshot a node receives |
+
+**Precisely:** `xds_control_plane` does **not** create the dynamic config. It is the static
+answer to *"where do I ask for config?"* — the cable between Envoy and the control plane.
+`backend_service` is the config that travels over that cable: a name with no definition in
+the bootstrap, which is why the listener stays in *warming* until CDS supplies it.
+
+Failure modes make the difference obvious:
+
+| Typo | Result |
+| :--- | :--- |
+| `ads_config` points at a wrong name | Envoy **fails at boot**: `cluster 'x' not found` (the pipe is missing) |
+| both `xds_control_plane` occurrences renamed consistently | **works identically** — the name is arbitrary |
+| listener's `cluster` name not matched by any CDS resource | Envoy boots, listener **warms forever**, no traffic, no error in the access log |
+| Go `clusterName` renamed but Envoy listener not | same as above — a silent warming, the worst failure mode |
+
+> One line: **`xds_control_plane` = how Envoy gets its config; `backend_service` = what Envoy
+> is told to use.** The first is infrastructure, the second is data.
+
+
 ---
 
 ## 7. Exercises (next steps)
