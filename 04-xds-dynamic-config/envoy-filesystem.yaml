@@ -9,13 +9,13 @@ dynamic_resources:
   # ─── DYNAMIC LISTENERS FROM DISK ───
   lds_config:
     path_config_source:
-      path: "/etc/envoy/dynamic_listeners.yaml"
+      path: "/etc/envoy/dynamic_listeners.json"
     resource_api_version: V3
 
   # ─── DYNAMIC CLUSTERS FROM DISK ───
   cds_config:
     path_config_source:
-      path: "/etc/envoy/dynamic_clusters.yaml"
+      path: "/etc/envoy/dynamic_clusters.json"
     resource_api_version: V3
 
 admin:
