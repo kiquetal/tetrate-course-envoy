@@ -163,9 +163,20 @@ curl -s http://localhost:15001/config_dump \
 
 ---
 
-## 6. Config tour (the two important blocks)
+## 6. Config tour (the five blocks that matter)
 
-### `envoy-grpc.json` → where the config comes from
+Every byte of Envoy behaviour in this lab comes from one of five places. Two live in
+`envoy-grpc.json` (bootstrap), two in `grpc-control-plane/main.go` (what gets served),
+and one is implicit (the listener that *consumes* the dynamic cluster).
+
+```
+ envoy-grpc.json                                grpc-control-plane/main.go
+ ├── ① dynamic_resources  (where config comes from)   ├── ④ snapshot + SetSnapshot (the push)
+ ├── ② static cluster     (how to reach the ADS server)└── ⑤ makeCluster() (the payload)
+ └── ③ static listener    (who consumes the cluster)
+```
+
+### ① `envoy-grpc.json` → where the config comes from
 
 ```json
 "dynamic_resources": {
@@ -183,8 +194,68 @@ curl -s http://localhost:15001/config_dump \
   `xds_control_plane`"*. That cluster is the **only** static cluster, and it must
   speak HTTP/2 (`http2_protocol_options`), because gRPC runs on HTTP/2.
 * `resource_api_version: V3` → Envoy v1.30 defaults to V3 anyway; explicit is better.
+* Only `cds_config` is listed → **only CDS is dynamic**. Add `lds_config`,
+  `sds_config`, or HCM's `rds` to buy more reloadable slices (see `LEARNINGS.md` §8).
 
-### `grpc-control-plane/main.go` → what gets pushed
+### ② `envoy-grpc.json` → the static cluster that reaches the control plane
+
+This is the chicken-and-egg cluster: Envoy cannot learn how to reach the control
+plane *from* the control plane, so it is static and looks like any other upstream.
+
+```json
+"clusters": [{
+  "name": "xds_control_plane",
+  "type": "STRICT_DNS",
+  "connect_timeout": "1s",
+  "load_assignment": {
+    "cluster_name": "xds_control_plane",
+    "endpoints": [{ "lb_endpoints": [{ "endpoint": { "address": {
+      "socket_address": { "address": "control-plane", "port_value": 18000 } } } }] }]
+  },
+  "typed_extension_protocol_options": {
+    "envoy.extensions.upstreams.http.v3.HttpProtocolOptions": {
+      "@type": "type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions",
+      "explicit_http_config": { "http2_protocol_options": {} }
+    }
+  }
+}]
+```
+
+| Field | Why it is there |
+| :--- | :--- |
+| `type: STRICT_DNS` | `control-plane` is a **Docker DNS name** on `xds-grpc-net`, not an IP. Envoy resolves it and keeps endpoints in sync with DNS answers. |
+| `connect_timeout: 1s` | Fail fast at boot if the control plane is not up yet (then retry with backoff). |
+| `explicit_http_config.http2_protocol_options: {}` | gRPC **runs on HTTP/2**. Without it Envoy speaks HTTP/1.1 to a gRPC server and the stream never establishes. This is the #1 xDS mistake. |
+| `typed_extension_protocol_options` | Modern replacement for the deprecated top-level `http2_protocol_options`. |
+
+### ③ `envoy-grpc.json` → the static listener that consumes the dynamic cluster
+
+```json
+"listeners": [{
+  "name": "ingress_listener",
+  "address": { "socket_address": { "address": "0.0.0.0", "port_value": 9902 } },
+  "filter_chains": [{ "filters": [{
+    "name": "envoy.filters.network.tcp_proxy",
+    "typed_config": {
+      "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+      "stat_prefix": "tcp_proxy",
+      "cluster": "backend_service"
+    }
+  }] }]
+}]
+```
+
+The important detail: **`backend_service` does not exist in `static_resources`**. The
+listener references a name that only the control plane can supply, so Envoy keeps the
+listener in *warming* until CDS delivers it. That is the clearest possible proof that the
+cluster is dynamic — remove the control plane from the compose file and this listener
+never opens.
+
+Reminder from `LEARNINGS.md` §10: `tcp_proxy` is L4, so there are no routes and no HTTP
+filters here. Rate limiting / `ext_authz` / `jwt_authn` would require switching the
+listener to `http_connection_manager`.
+
+### ④ `grpc-control-plane/main.go` → what gets pushed (the snapshot)
 
 ```go
 cachev3.NewSnapshot(version, map[resource.Type][]cachetypes.Resource{
@@ -199,6 +270,73 @@ cp.snap.SetSnapshot(ctx, "global", snapshot)   // <- this pushes to all watchers
   control plane hashes by `node.id` / metadata).
 * `SetSnapshot` is what wakes up the open ADS stream and triggers
   `DiscoveryResponse`.
+* `http.Error` on compile failure → nothing is published, so a bad snapshot can
+  never partially apply.
+
+### ⑤ `grpc-control-plane/main.go` → `makeCluster()` field by field
+
+This function is the *entire* dynamic payload in the lab; everything else is plumbing.
+
+```go
+&cluster.Cluster{
+    Name:                 "backend_service",   // ← the name the listener references
+    ConnectTimeout:       durationpb.New(1 * time.Second),
+    ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_STRICT_DNS},
+    LbPolicy:             cluster.Cluster_ROUND_ROBIN,
+    LoadAssignment: &endpoint.ClusterLoadAssignment{
+        ClusterName: "backend_service",        // ← must match Name
+        Endpoints: []*endpoint.LocalityLbEndpoints{{
+            LbEndpoints: []*endpoint.LbEndpoint{{
+                HostIdentifier: &endpoint.LbEndpoint_Endpoint{
+                    Endpoint: &endpoint.Endpoint{
+                        Address: &core.Address{
+                            Address: &core.Address_SocketAddress{
+                                SocketAddress: &core.SocketAddress{
+                                    Address:       "backend-v2",  // or "backend-v1"
+                                    PortSpecifier: &core.SocketAddress_PortValue{PortValue: 8080},
+                                },
+                            },
+                        },
+                    },
+                },
+            }},
+        }},
+    },
+}
+```
+
+| Field | Meaning | Change it to… |
+| :--- | :--- | :--- |
+| `Name` | the contract with the listener's `cluster:` field | rename both sides → new wiring |
+| `ConnectTimeout` | TCP connect budget to the backend | see the nested-budget rule in `LEARNINGS.md` §10 |
+| `Cluster_Type` | how endpoints are discovered: `STATIC`, `STRICT_DNS`, `LOGICAL_DNS`, `EDS`, `ORIGINAL_DST` | `EDS` when endpoints come from `ClusterLoadAssignment` resources |
+| `LbPolicy` | `ROUND_ROBIN`, `LEAST_REQUEST`, `RANDOM`, `RING_HASH`, `MAGLEV` | `LEAST_REQUEST` under uneven latency |
+| `LoadAssignment` | inline endpoints (no EDS) | move to EDS for dynamic IPs |
+| `Address: "backend-v2"` | Docker DNS name inside `xds-grpc-net` | the actual hostname/IP of the workload |
+
+Note what is **absent**: no `tls_context` (no mTLS to the backend), no
+`outlier_detection`, no `circuit_breakers`, no `health_checks`, no
+`typed_extension_protocol_options` (the backend is plain HTTP/1.1 `http-echo`). Each of
+those is a one-field addition and each one is a knob the POC is supposed to exercise.
+
+### ⑥ Where to look — cheat map
+
+| Question | File | Search for |
+| :--- | :--- | :--- |
+| Where does Envoy get its config? | `envoy-grpc.json` | `"dynamic_resources"` |
+| Which stream carries it? | `envoy-grpc.json` | `"ads_config"` |
+| How does Envoy reach the control plane? | `envoy-grpc.json` | `"xds_control_plane"` |
+| Why HTTP/2? | `envoy-grpc.json` | `"explicit_http_config"` |
+| Which port takes traffic? | `envoy-grpc.json` | `"ingress_listener"` / `9902` |
+| Which cluster does the listener use? | `envoy-grpc.json` | `"cluster": "backend_service"` |
+| What content gets pushed? | `grpc-control-plane/main.go` | `func makeCluster` |
+| What triggers a push? | `grpc-control-plane/main.go` | `SetSnapshot` |
+| How is a version chosen? | `grpc-control-plane/main.go` | `c.version++` |
+| What can I switch at runtime? | `grpc-control-plane/main.go` | `map[string]string{"v1":` |
+| Ports and containers | `docker-compose.grpc.yaml` | `ports:` |
+| What Envoy *actually* applied | running Envoy | `curl :15001/config_dump` |
+| Did it reject anything? | running Envoy | `curl :15001/stats \| grep control_plane` |
+| What is being served now? | running control plane | `curl :19000/status` |
 
 ---
 
