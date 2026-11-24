@@ -1,0 +1,5 @@
+# Go build output from the xDS control plane
+04-xds-dynamic-config/grpc-control-plane/xds-server
+
+# Vim swap files
+*.swp
