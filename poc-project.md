@@ -1,6 +1,8 @@
-# POC Project — Tenant-Aware Edge Platform (Go + Java 21 + Envoy)
+# POC Project — **Portico** (Go + Java 21 + Envoy)
 
 > One line: **Go owns desired state and xDS; Java 21 owns request policy and business logic; Envoy is the only thing on the traffic path.**
+>
+> Project name: **Portico** (the gateway). Execution plan: [`ROADMAP.md`](./ROADMAP.md).
 
 This document is the project brief that grows out of the Envoy labs in this repository
 (`04-xds-dynamic-config/`), and a checklist of the Envoy knowledge it is meant to prove.
