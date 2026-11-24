@@ -294,6 +294,164 @@ at runtime.
 > slice** of the config. This lab only bought CDS — that's why `cds:` is the only thing that
 > ever appears in the logs.
 
+---
+
+## 🗺️ 9. Object map: a cluster is NOT the backend
+
+The mistake everyone makes first: reading `cluster: backend_service` as "the backend".
+A **cluster is a named address book + dial policy**. The actual backend is the IP:port inside
+`load_assignment`. Routes and filters only ever hold the **name string**.
+
+```
+ ┌─────────────────────────────────────────────────────────────────────────────┐
+ │ SOCKET / LISTENER  ("where do I listen")                        xDS: LDS    │
+ │   0.0.0.0:9902                                                              │
+ ├─────────────────────────────────────────────────────────────────────────────┤
+ │ NETWORK FILTER CHAIN  ("what happens to raw bytes")             xDS: LDS    │
+ │   tls_inspector → tcp_proxy | http_connection_manager                        │
+ ├─────────────────────────────────────────────────────────────────────────────┤
+ │ ROUTE TABLE  ("which request goes where")  — HTTP only          xDS: RDS    │
+ │   vhost acme.example.com                                                     │
+ │     /api/*   → cluster: "java-service"     ← a STRING, not an address        │
+ │     /health  → cluster: "java-service" + ext_authz DISABLED                  │
+ ├─────────────────────────────────────────────────────────────────────────────┤
+ │ HTTP FILTERS  ("may it proceed? change it? count it?")          xDS: LDS    │
+ │   jwt_authn  → ext_authz (→ cluster "java_policy")  → ratelimit (→ "rls")     │
+ │   ext_proc   → router                                                       │
+ ├─────────────────────────────────────────────────────────────────────────────┤
+ │ CLUSTER  ("how do I dial that name")                            xDS: CDS    │
+ │   name: "java-service"        ← the name the route used                      │
+ │   type: STRICT_DNS | EDS                                                    │
+ │   lb_policy, connect_timeout, circuit_breakers, outlier_detection           │
+ │   tls to upstream, http/2 (needed for gRPC)                                 │
+ ├─────────────────────────────────────────────────────────────────────────────┤
+ │ ENDPOINTS  ("who is actually listening")                        xDS: EDS    │
+ │   10.0.3.7:8080, 10.0.3.9:8080   (inline in load_assignment, or via EDS)     │
+ └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### The indirection, spelled out
+
+```
+ route.cluster: "java-service"  ────string────►  cluster.name: "java-service"
+                                                        │
+                                        load_assignment │  (or EDS response)
+                                                        ▼
+                                           10.0.3.7:8080  ← the real backend
+```
+
+So "backend" appears in exactly one place: the endpoint address. Everything above it is
+**names and policy**, which is why a control plane can rewrite the topology without touching
+routers or services.
+
+| Object | Answers | References | If you change it |
+| :--- | :--- | :--- | :--- |
+| Listener | which socket + which filter stack | filter chain | clients reconnect / port moves |
+| HCM | HTTP parsing, filter order, route source | route table, filters | every request affected |
+| Route (`vhost`/`routes`) | which requests go where | **cluster name (string)** | routing changes, zero restarts |
+| HTTP filter | allow / deny / mutate / count | cluster name (ext_authz, RLS, ext_proc) | policy changes |
+| Cluster | how to dial + how to balance/protect | endpoints, TLS, EDS | timeouts, LB, upstream TLS |
+| Endpoint | who actually serves | nothing | capacity changes |
+
+> Rule of thumb: **filters decide `whether`, routes decide `where`, clusters decide `how`,
+> endpoints decide `who`.** A cluster referenced by nobody is dead config; a route pointing
+> at a cluster that does not exist is a rejected snapshot (or a 503 at runtime).
+
+---
+
+## 🎯 10. Interception map: intercept WHERE and WHEN
+
+"Where and when" has two independent axes: **position in the layers** (L4 vs L7 vs upstream)
+and **phase of the request** (connect → request headers → request body → response headers →
+response body). Every filter is pinned to a point on both.
+
+```
+ time ──────────────────────────────────────────────────────────────────────────►
+
+ DOWNSTREAM (client)                                            UPSTREAM (backend)
+ ┌──────────────┐   ┌──────────────────────────────────────┐   ┌──────────────────┐
+ │ TCP connect  │   │            L7 REQUEST                │   │  new connection  │
+ └──────┬───────┘   └──────────────────────────────────────┘   └────────┬─────────┘
+        │                                                               │
+        ▼                                                               ▼
+ ┌─────────────────────┐  ┌────────────────────────────────────────────┐
+ │ ① L4 interception   │  │ ③ L7 interception, per request             │
+ │                     │  │                                            │
+ │ network filters:    │  │ route lookup  (RDS)                        │
+ │  - tls_inspector    │  │   └─ route.cluster = "backend_service"     │
+ │  - proxy_protocol   │  │                                            │
+ │  - tcp_proxy        │  │ http_filters, in order:                    │
+ │  - network ext_authz│  │   - jwt_authn      (401)                   │
+ │    (per CONNECTION) │  │   - ext_authz      (403) → java_policy     │
+ │  - connection limit │  │   - ext_proc       (mutate headers/body)   │
+ │                     │  │   - ratelimit      (429) → rls             │
+ └─────────┬───────────┘  │   - router  (must be last)                 │
+           │              └────────────────┬───────────────────────────┘
+           │                               │
+           │                               ▼
+           │              ┌────────────────────────────────────────────┐
+           │              │ ④ UPSTREAM interception (per cluster)      │
+           │              │   - connect_timeout, TLS origination (SDS) │
+           │              │   - circuit_breakers, outlier_detection    │
+           │              │   - retries, retry_budget, hedging         │
+           │              └────────────────┬───────────────────────────┘
+           │                               │
+           │                               ▼
+           │                    ┌───────────────────────┐
+           │                    │  BACKEND (Java 21)    │
+           │                    └───────────┬───────────┘
+           │                                │
+           ▼                                ▼
+ ┌──────────────────────────────────────────────────────────────────┐
+ │ ⑤ RESPONSE path (reverse order): encode headers → encode body     │
+ │    ext_proc can mutate responses · access log · stats · tracing   │
+ └──────────────────────────────────────────────────────────────────┘
+```
+
+### "I want to…" → intercept here
+
+| Goal | Intercept at | Configured in | Per | Dynamic |
+| :--- | :--- | :--- | :--- | :--- |
+| Limit concurrent connections, raw TCP | ① network `tcp_proxy` / connection limit | LDS filter chain | connection | LDS |
+| mTLS / certificate inspection | ① `tls_inspector` + transport socket (SDS) | LDS + SDS | connection | LDS/SDS |
+| Route by path/host/header | ③ RDS route match | RDS | request | RDS |
+| Authenticate (JWT) | ③ `jwt_authn` | LDS (filters) | request | LDS |
+| Authorize with your own logic | ③ `ext_authz` → gRPC service | LDS (filters) + CDS (cluster) | request | LDS |
+| Change headers / inspect body | ③ `ext_proc` → gRPC service | LDS + CDS | request | LDS |
+| Global quota | ③ `ratelimit` → RLS + Redis | LDS + RDS descriptors + CDS | request | LDS/RDS |
+| Per-instance quota | ③ `local_ratelimit` | LDS or RDS | request | LDS/RDS |
+| Timeouts, retries, LB, TLS to backend | ④ cluster fields | CDS | request/attempt | CDS |
+| Eject a sick backend | ④ `outlier_detection` | CDS | attempt | CDS |
+| Rewrite response / add headers | ⑤ encode phase | LDS (ext_proc) / route | response | LDS/RDS |
+| Log / trace / metrics | ⑤ access log + stats + tracer | LDS (HCM) | request | LDS |
+
+### The nested-budget rule (why "my timeout doesn't work")
+
+```
+ route.timeout                    = 5s     ← whole request, hard stop
+   └─ ext_authz grpc_service.timeout = 0.1s  ← policy must answer fast
+   └─ route.retry_policy.per_try_timeout = 1s
+        └─ upstream cluster.connect_timeout = 0.25s
+             └─ TCP handshake
+
+ inner budgets must be SMALLER than outer ones, or the outer one hides the inner one.
+```
+
+> ⚠️ In `ext_authz`, the timeout lives **inside `grpc_service`**, not on the filter:
+> `grpc_service: { envoy_grpc: {...}, timeout: 0.1s }` — putting `timeout` at the filter
+> level is rejected by `envoy --mode validate` (`no such field: 'timeout'`).
+
+### Config order vs execution order (validated)
+
+`route_config` and `http_filters` are **sibling fields** of the HCM. Writing one before the
+other changes nothing — Envoy resolves the route first, always, then runs the filter list.
+Only two orderings are semantic:
+
+1. **the order inside `http_filters`** (`jwt_authn` → `ext_authz` → `ratelimit` → `router`);
+2. **`@type` first inside any `typed_config`** object (practical parser requirement with
+   proto JSON / YAML→JSON conversion).
+
+
 
 
 
