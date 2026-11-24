@@ -1,0 +1,46 @@
+name: xds-grpc-lab
+
+services:
+  backend-v1:
+    image: hashicorp/http-echo:latest
+    command: ["-text=Hello from Backend V1 (served over gRPC xDS)", "-listen=:8080"]
+    expose:
+      - "8080"
+    networks:
+      - xds-grpc-net
+
+  backend-v2:
+    image: hashicorp/http-echo:latest
+    command: ["-text=Hello from Backend V2 (served over gRPC xDS)", "-listen=:8080"]
+    expose:
+      - "8080"
+    networks:
+      - xds-grpc-net
+
+  # The "mini istiod": serves CDS snapshots over ADS gRPC on :18000
+  # and a tiny toggle API on :19000.
+  control-plane:
+    build: ./grpc-control-plane
+    ports:
+      - "19000:19000"   # curl localhost:19000/switch
+    networks:
+      - xds-grpc-net
+
+  envoy:
+    image: envoyproxy/envoy:v1.30.0
+    ports:
+      - "9902:9902"     # ingress traffic
+      - "15001:15000"   # admin API (host 15001, container 15000)
+    volumes:
+      - ./envoy-grpc.json:/etc/envoy/envoy.json:ro
+    command: ["envoy", "-c", "/etc/envoy/envoy.json"]
+    depends_on:
+      - control-plane
+      - backend-v1
+      - backend-v2
+    networks:
+      - xds-grpc-net
+
+networks:
+  xds-grpc-net:
+    driver: bridge
