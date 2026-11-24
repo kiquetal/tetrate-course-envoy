@@ -9,12 +9,14 @@ dynamic_resources:
   # ─── DYNAMIC LISTENERS FROM DISK ───
   lds_config:
     path_config_source:
-      path: "/tmp/dynamic_listeners.yaml" # ◄── Envoy watches this file for updates!
+      path: "/etc/envoy/dynamic_listeners.yaml"
+    resource_api_version: V3
 
   # ─── DYNAMIC CLUSTERS FROM DISK ───
   cds_config:
     path_config_source:
-      path: "/tmp/dynamic_clusters.yaml" # ◄── Envoy watches this file for updates!
+      path: "/etc/envoy/dynamic_clusters.yaml"
+    resource_api_version: V3
 
 admin:
   address:
