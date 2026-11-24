@@ -81,6 +81,39 @@ You can inspect Envoy's active configuration and dynamic resource status via its
 
 ---
 
+## 🛑 Troubleshooting: Why `0.0.0.0` vs `127.0.0.1` Matters in Docker
+
+If you ever get `Connection Refused` when trying to access an Envoy admin or service port from your host machine (`localhost`), it is almost always a bind address mismatch inside the container configuration.
+
+### 🗺️ ASCII Network Namespace Breakdown:
+
+```text
+ ┌────────────────────────────────────── HOST MACHINE (Your Laptop) ──────────────────────────────────────┐
+ │                                                                                                        │
+ │   User runs: curl http://localhost:15000                                                               │
+ │        │                                                                                               │
+ │        ▼                                                                                               │
+ │   [ Docker Port Forwarding: -p 15000:15000 ]                                                           │
+ └────────┼───────────────────────────────────────────────────────────────────────────────────────────────┘
+          │
+          ▼ Enters Container Network Namespace
+ ┌──────────────────────────────────────── CONTAINER ROOM ────────────────────────────────────────────────┐
+ │                                                                                                        │
+ │   ❌ SCENARIO A (`address: 127.0.0.1`):                                                                │
+ │   Envoy listens ONLY on its private internal loopback.                                                 │
+ │   Docker's forwarded packet arrives ➔ Envoy REJECTS it (Connection Refused).                           │
+ │                                                                                                        │
+ │   ✅ SCENARIO B (`address: 0.0.0.0`):                                                                │
+ │   Envoy listens on ALL container network interfaces.                                                   │
+ │   Docker's forwarded packet arrives ➔ Envoy ACCEPTS it ➔ Returns Admin JSON!                           │
+ │                                                                                                        │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+* **Rule of Thumb**: Any service inside a Docker container that you want to reach from your host machine must bind to **`0.0.0.0`**, never `127.0.0.1`.
+
+---
+
 ## 🧹 Clean Up
 
 When you are finished with the lab, tear down the containers:
