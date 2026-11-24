@@ -60,3 +60,31 @@ To master Envoy troubleshooting, you need to know which admin endpoint to query.
 | **`/listeners`** | 🚪 **The Inbound Doorbell Registry** | All active ports and network listeners listening for downstream traffic. |
 | **`/runtime`** | ⚙️ **The Feature Flag Panel** | Dynamic runtime configuration layers and feature flags currently active. |
 
+---
+
+## 🧭 4. The Golden Rule: Downstream vs. Upstream (From Envoy's POV)
+
+The biggest point of confusion in Envoy is perspective. **The POV is ALWAYS Envoy.** 
+
+```text
+ ┌───────────────────┐               ┌───────────────────┐               ┌───────────────────┐
+ │ Downstream Client │               │    ENVOY PROXY    │               │  Upstream Server  │
+ │ (Browser / App)   │               │    (THE POV)      │               │ (Database / App)  │
+ └─────────┬─────────┘               └─────────┬─────────┘               └─────────┬─────────┘
+           │                                   │                                   │
+           │ 1. Initiates connection           │                                   │
+           │    TO Envoy (Requests coming IN)  │                                   │
+           ├──────────────────────────────────►│                                   │
+           │                                   │ 2. Initiates connection           │
+           │                                   │    TO backend (Requests going OUT)│
+           │                                   │──────────────────────────────────►│
+           │                                   │                                   │
+           │    👉 DOWNSTREAM                  │    👉 UPSTREAM                    │
+```
+
+* **Downstream (Where traffic comes *FROM*)**:
+  > Any client that **dials into Envoy**, initiates a TCP connection, or sends an HTTP request (e.g., a web browser, mobile app, or another mesh service calling your app).
+* **Upstream (Where traffic is sent *TO*)**:
+  > The backend destination that **Envoy dials out to** to forward requests and fetch responses (e.g., your local Go/Node container on `localhost:8080`, external databases, or third-party APIs).
+
+
