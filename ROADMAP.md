@@ -1,8 +1,10 @@
-# Portico — Roadmap to v1.0
+# Pyloros — Roadmap to v1.0
 
-> **Portico**: the entrance structure of a building — the gateway.
+> **Pyloros** (πυλωρός): *the gatekeeper* — the one who decides who passes through the gate.
 > A tenant-aware edge platform: **Go** compiles desired state into xDS,
 > **Java 21** decides policy, **Envoy** carries the traffic.
+>
+> Pronounced *pee-lo-ROS*. Works as binary (`pyloros`), CLI (`pyloros apply`) and domain.
 
 This is the execution plan that turns the Envoy course labs (`04-xds-dynamic-config/`)
 into a released project. Every phase ends with something you can **demo and measure**,
@@ -14,21 +16,24 @@ not something you merely finished.
 
 | Item | Value |
 | :--- | :--- |
-| Project | **Portico** |
-| Repo | `portico` (new repository; this course repo stays as notes) |
-| CLI | `portico` (`portico apply`, `portico diff`, `portico rollback`) |
-| Tagline | *Compile tenancy to xDS. Enforce policy at the edge.* |
+| Project | **Pyloros** |
+| Repo | `pyloros` (new repository; this course repo stays as notes) |
+| CLI | `pyloros` (`pyloros apply`, `pyloros diff`, `pyloros rollback`) |
+| Tagline | *Compile tenancy to xDS. Decide at the gate.* |
 | Version plan | `v0.1` (P1) → `v0.2` (P2/P3) → `v1.0` (P5) |
 
-Alternates considered: Turnstile (admission control), Viaduct (carrier), Trellis (growth).
-Rejected only for pronunciation/trademark ambiguity in the gateway space.
+The name is the thesis: the **gatekeeper** admits, denies and meters traffic; it does not
+carry it. Envoy carries, Go compiles the rules, Java is the gatekeeper's judgment.
+
+Alternates considered: Stoa (Greek portico), Krites (judge), Propylaea (the gateway),
+Portico, Turnstile, Viaduct. Rejected for length, pronunciation, or name collision.
 
 ---
 
 ## 1. Repository layout (target)
 
 ```
-portico/
+pyloros/
 ├── README.md                 # 1 diagram, 3 numbers, 5-minute demo
 ├── Makefile                  # make up | down | smoke | load | chaos
 ├── docs/
@@ -38,7 +43,7 @@ portico/
 │   ├── drills.md             # expected vs observed failure table
 │   └── postmortems/          # at least one, blameless
 ├── control-plane/            # GO
-│   ├── cmd/portico/          # CLI
+│   ├── cmd/pyloros/          # CLI
 │   ├── internal/compile/     # desired state → snapshot (pure, testable)
 │   ├── internal/xds/         # ADS server, NACK callbacks, versions
 │   └── internal/store/       # Postgres: tenants, routes, quotas, audit
@@ -78,14 +83,14 @@ portico/
 * Postgres schema: `tenant`, `route`, `upstream`, `quota`, `audit`.
 * `internal/compile`: pure function `desired state → snapshot` (expand → link → dedupe → validate → version → diff).
 * ADS server (CDS + RDS), per-type version tracking, ACK/NACK callbacks, `last_good` per node.
-* `portico diff|apply|rollback`, snapshot persistence, audit log ("who/what/when/ticket").
+* `pyloros diff|apply|rollback`, snapshot persistence, audit log ("who/what/when/ticket").
 * `/status`: served version, per-node ACKed version, `stale_clients`, `nack_total`.
 
 **Exit criteria**
 * New tenant published in **< 500 ms** with **0 dropped requests** (measured with k6 while applying).
-* `portico apply --dry-run` prints the exact resources that would change.
+* `pyloros apply --dry-run` prints the exact resources that would change.
 * A deliberately broken reference is **rejected at compile**, nothing is published.
-* `portico rollback <version>` restores service in < 1 s.
+* `pyloros rollback <version>` restores service in < 1 s.
 
 **Demo:** add a tenant live; break a config on purpose (see it rejected); roll back.
 
@@ -165,7 +170,7 @@ portico/
 | :--- | :--- | :--- |
 | 1 | P0 | CI + smoke test green |
 | 2 | P1a | compile pipeline + tests |
-| 3 | P1b | ADS + NACK + `portico` CLI |
+| 3 | P1b | ADS + NACK + `pyloros` CLI |
 | 4 | P2 | HCM/RDS + TLS/SDS + traces |
 | 5 | P3a | `ext_authz` Java |
 | 6 | P3b + P4 | RLS + resilience + first chaos drill |
@@ -217,7 +222,7 @@ portico/
 
 ## 7. What to carry from the course repo
 
-| From `tetrate-course-envoy` | Into Portico |
+| From `tetrate-course-envoy` | Into Pyloros |
 | :--- | :--- |
 | `grpc-control-plane/main.go` | seed for `internal/xds` (ADS, snapshot, `constantHash` → real hashing) |
 | `envoy-grpc.json` | seed for `envoy/bootstrap.json` |
